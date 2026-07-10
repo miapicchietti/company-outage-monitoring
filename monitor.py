@@ -455,6 +455,10 @@ def main():
                 }
             )
             state[company] = {"breached": False, "consecutive_fails": 0}
+            save_state(state)
+            if previous_breached:
+                generate_status_page(companies, state)
+                deploy_status_page()
             continue
 
         consecutive_fails += 1
@@ -489,9 +493,11 @@ def main():
 
         if not confirmed:
             state[company] = {"breached": False, "consecutive_fails": consecutive_fails}
+            save_state(state)
             continue
 
         state[company] = {"breached": True, "consecutive_fails": consecutive_fails}
+        save_state(state)
 
         if not previous_breached:
             is_down = is_outage(result)
@@ -505,6 +511,8 @@ def main():
                     result["elapsed"],
                     threshold,
                 )
+            generate_status_page(companies, state)
+            deploy_status_page()
 
     save_state(state)
     generate_status_page(companies, state)
