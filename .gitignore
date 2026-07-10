@@ -5,4 +5,6 @@ logs/
 screenshots/
 monitor_log.csv
 state.json
+status.html
+monitor.lock
 com.miapicchietti.syntheticmonitor.plist

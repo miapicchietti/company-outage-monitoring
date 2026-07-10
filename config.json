@@ -1,25 +1,8 @@
 {
-  "threshold_seconds": 1.56,
+  "threshold_seconds": 10,
   "check_interval_minutes": 5,
   "http_timeout_seconds": 15,
   "claude_model": "haiku",
-  "companies": {
-    "Affirm": "https://www.affirm.com",
-    "Apple": "https://www.apple.com",
-    "Barclays": "https://www.barclays.co.uk",
-    "British Airways": "https://www.britishairways.com",
-    "Clay": "https://www.clay.com",
-    "Cloudflare": "https://www.cloudflare.com",
-    "JPMorgan Chase": "https://www.jpmorganchase.com",
-    "Meta": "https://about.meta.com",
-    "Monzo": "https://monzo.com",
-    "Okta": "https://www.okta.com",
-    "Plaid": "https://plaid.com",
-    "Revolut": "https://www.revolut.com",
-    "Robinhood": "https://robinhood.com",
-    "Salesforce": "https://www.salesforce.com",
-    "SoFi": "https://www.sofi.com",
-    "Wise": "https://wise.com",
-    "Southwest": "https://www.southwest.com"
-  }
+  "consecutive_failures_required": 2,
+  "alert_on_slow": false
 }
