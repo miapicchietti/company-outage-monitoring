@@ -4,7 +4,10 @@ __pycache__/
 logs/
 screenshots/
 monitor_log.csv
+slow_trickle_log.csv
 state.json
 status.html
 monitor.lock
 com.miapicchietti.syntheticmonitor.plist
+.pages-worktree/
+.last_deploy

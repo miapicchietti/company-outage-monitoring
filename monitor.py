@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Synthetic monitoring: times each company's homepage, screenshots + analyzes
-slow/failed responses with Claude, and alerts to Slack."""
+"""Synthetic monitoring: times each company's homepage and alerts to Slack."""
 
 import csv
 import fcntl
-import glob
 import html
-import io
 import json
 import os
+import shutil
+import socket
 import subprocess
 import sys
-import zipfile
+import threading
+import time
 from datetime import datetime
+
+import urllib3.util.connection as urllib3_cn
+
+# This network has a broken/blackholed IPv6 route: any connection attempt
+# (direct or the OS cert-verification calls truststore triggers) stalls for
+# 10s+ on IPv6 before falling back to IPv4. Forcing IPv4 everywhere avoids it.
+urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
 
 import truststore
 
@@ -23,11 +30,14 @@ import requests
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 COMPANIES_CSV_PATH = os.path.join(BASE_DIR, "companies.csv")
-SCREENSHOT_DIR = os.path.join(BASE_DIR, "screenshots")
 CSV_LOG_PATH = os.path.join(BASE_DIR, "monitor_log.csv")
+SLOW_TRICKLE_LOG_PATH = os.path.join(BASE_DIR, "slow_trickle_log.csv")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
 LOCK_PATH = os.path.join(BASE_DIR, "monitor.lock")
 STATUS_PAGE_PATH = os.path.join(BASE_DIR, "status.html")
+PAGES_WORKTREE_PATH = os.path.join(BASE_DIR, ".pages-worktree")
+LAST_DEPLOY_PATH = os.path.join(BASE_DIR, ".last_deploy")
+MIN_DEPLOY_INTERVAL_SECONDS = 180
 CSV_FIELDS = [
     "timestamp",
     "url",
@@ -57,6 +67,7 @@ def is_outage(result):
         result["error"] is not None
         or result["status_code"] is None
         or (result["status_code"] is not None and result["status_code"] >= 500)
+        or result["status_code"] == 404
     )
 
 
@@ -77,24 +88,31 @@ def load_companies():
         return [(row["company"], row["url"]) for row in csv.DictReader(f)]
 
 
-def find_claude_binary():
-    which = subprocess.run(["which", "claude"], capture_output=True, text=True)
-    if which.returncode == 0 and which.stdout.strip():
-        return which.stdout.strip()
-    matches = sorted(
-        glob.glob(
-            os.path.expanduser(
-                "~/.vscode/extensions/anthropic.claude-code-*/resources/native-binary/claude"
-            )
-        )
-    )
-    if matches:
-        return matches[-1]
-    return None
+_slow_trickle_lock = threading.Lock()
 
 
-def check_url(url, timeout):
-    start = datetime.now()
+def log_slow_trickle(company, url, true_elapsed, status_code, error):
+    """Diagnostic-only: records how long a request that blew past the hard
+    timeout actually took to finish. Never affects the live monitoring verdict
+    -- it's purely for picking a well-informed http_timeout_seconds later."""
+    row = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "company": company or "",
+        "url": url,
+        "true_elapsed_s": f"{true_elapsed:.3f}",
+        "final_status": status_code if status_code is not None else "",
+        "final_error": error or "",
+    }
+    with _slow_trickle_lock:
+        file_exists = os.path.exists(SLOW_TRICKLE_LOG_PATH)
+        with open(SLOW_TRICKLE_LOG_PATH, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
+
+
+def _do_get(url, timeout, result_holder):
     try:
         resp = requests.get(
             url,
@@ -107,74 +125,52 @@ def check_url(url, timeout):
             },
             allow_redirects=True,
         )
-        elapsed = (datetime.now() - start).total_seconds()
-        return {
-            "elapsed": elapsed,
-            "status_code": resp.status_code,
-            "error": None,
-        }
+        result_holder["status_code"] = resp.status_code
+        result_holder["error"] = None
     except requests.exceptions.Timeout:
-        elapsed = (datetime.now() - start).total_seconds()
-        return {"elapsed": elapsed, "status_code": None, "error": "Timeout"}
+        result_holder["status_code"] = None
+        result_holder["error"] = "Timeout"
     except requests.exceptions.ConnectionError:
-        elapsed = (datetime.now() - start).total_seconds()
-        return {"elapsed": elapsed, "status_code": None, "error": "Connection Error"}
+        result_holder["status_code"] = None
+        result_holder["error"] = "Connection Error"
     except requests.exceptions.RequestException as e:
-        elapsed = (datetime.now() - start).total_seconds()
-        return {"elapsed": elapsed, "status_code": None, "error": type(e).__name__}
+        result_holder["status_code"] = None
+        result_holder["error"] = type(e).__name__
+    finally:
+        result_holder["finished_at"] = datetime.now()
 
 
-def take_screenshot(url, company, timestamp):
-    from playwright.sync_api import sync_playwright
+def check_url(url, timeout, company=None):
+    # requests' own timeout= is a per-read timeout, not a total-duration one --
+    # a server that trickles bytes slowly can dodge it and hang far past
+    # `timeout`. thread.join(timeout=...) below is the actual hard wall-clock
+    # cap: it returns control after `timeout` seconds no matter what the
+    # request thread is doing. The request thread is daemonized so an
+    # abandoned one can't block the script from exiting.
+    start = datetime.now()
+    result_holder = {}
+    thread = threading.Thread(target=_do_get, args=(url, timeout, result_holder), daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    elapsed = (datetime.now() - start).total_seconds()
 
-    safe_name = company.replace(" ", "_")
-    path = os.path.join(SCREENSHOT_DIR, f"{safe_name}_{timestamp}.png")
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
-            page.goto(url, timeout=20000)
-            page.screenshot(path=path)
-            browser.close()
-        return path
-    except Exception:
-        return None
+    if thread.is_alive():
+        def _log_true_completion():
+            thread.join()
+            true_elapsed = (result_holder.get("finished_at", datetime.now()) - start).total_seconds()
+            log_slow_trickle(
+                company, url, true_elapsed,
+                result_holder.get("status_code"), result_holder.get("error"),
+            )
 
+        threading.Thread(target=_log_true_completion, daemon=True).start()
+        return {"elapsed": elapsed, "status_code": None, "error": "Timeout"}
 
-def analyze_screenshot(claude_bin, screenshot_path, company, url, check_result, model):
-    prompt = (
-        f"Read the image at {screenshot_path}. This is a screenshot of {company}'s "
-        f"website ({url}), which was slow or failed a monitoring check "
-        f"(HTTP status: {check_result['status_code']}, response time: "
-        f"{check_result['elapsed']:.2f}s, error: {check_result['error']}). "
-        "In 6 words or fewer, state the most likely reason (e.g. 'Timeout', "
-        "'502 Bad Gateway error page', 'Blank page - failed to load', "
-        "'Slow load - large page assets'). Respond with ONLY the short phrase."
-    )
-    try:
-        result = subprocess.run(
-            [
-                claude_bin,
-                "-p",
-                prompt,
-                "--allowedTools",
-                "Read",
-                "--model",
-                model,
-                "--output-format",
-                "text",
-                "--add-dir",
-                BASE_DIR,
-                "--no-session-persistence",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=45,
-        )
-        reason = result.stdout.strip()
-        return reason if reason else None
-    except Exception:
-        return None
+    return {
+        "elapsed": elapsed,
+        "status_code": result_holder.get("status_code"),
+        "error": result_holder.get("error"),
+    }
 
 
 def log_result(row):
@@ -198,21 +194,13 @@ def fallback_reason(check_result, threshold):
     return "Unknown"
 
 
-def status_page_link():
-    public_url = os.environ.get("NETLIFY_SITE_URL")
-    if public_url:
-        return public_url
-    return f"file://{STATUS_PAGE_PATH}"
-
-
 def send_slack_alert(webhook_url, company, url, reason, is_down, elapsed, threshold):
     status_phrase = "is down" if is_down else "is responding slowly"
     emoji = ":red_circle:" if is_down else ":turtle:"
     text = (
         f"{emoji} {company} {status_phrase}\n"
         f"{url}\n"
-        f"Response time: {elapsed:.2f}s (threshold: {threshold:.2f}s) | Reason: {reason}\n"
-        f"View current status: {status_page_link()}"
+        f"Response time: {elapsed:.2f}s (threshold: {threshold:.2f}s) | Reason: {reason}"
     )
     try:
         requests.post(webhook_url, json={"text": text}, timeout=10)
@@ -220,42 +208,77 @@ def send_slack_alert(webhook_url, company, url, reason, is_down, elapsed, thresh
         print(f"  Failed to send Slack alert: {e}")
 
 
-def _status_row(company, url, is_down):
+def format_down_duration(down_since):
+    if not down_since:
+        return ""
+    try:
+        started = datetime.strptime(down_since, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+    seconds = max(0, (datetime.now() - started).total_seconds())
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "<1m"
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _status_row(company, url, state_label, down_since=None):
     company_esc = html.escape(company)
     url_esc = html.escape(url, quote=True)
-    label = "Down" if is_down else "OK"
-    cls = "down" if is_down else "ok"
+    label = {"outage": "Down", "slow": "Slow", "ok": "OK"}[state_label]
+    duration = format_down_duration(down_since) if state_label != "ok" else ""
     return (
-        f"<tr class='{cls}' data-name='{company_esc.lower()}'>"
+        f"<tr class='{state_label}' data-name='{company_esc.lower()}'>"
         f"<td>{company_esc}</td>"
         f"<td><a href='{url_esc}'>{url_esc}</a></td>"
-        f"<td><span class='pill pill-{cls}'>{label}</span></td>"
+        f"<td><span class='pill pill-{state_label}'>{label}</span></td>"
+        f"<td class='duration'>{duration}</td>"
         f"</tr>\n"
     )
 
 
 def generate_status_page(companies, state):
-    down = []
+    outages = []
+    slow = []
     ok = []
     for company, url in companies:
         entry = state.get(company, {})
         if isinstance(entry, dict) and entry.get("breached"):
-            down.append((company, url))
+            down_since = entry.get("down_since")
+            if entry.get("is_outage", True):
+                outages.append((company, url, down_since))
+            else:
+                slow.append((company, url, down_since))
         else:
             ok.append((company, url))
 
-    total = len(down) + len(ok)
+    total = len(outages) + len(slow) + len(ok)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    if down:
-        attention_html = "".join(_status_row(c, u, True) for c, u in down)
+    if outages:
+        outage_html = "".join(_status_row(c, u, "outage", ds) for c, u, ds in outages)
     else:
-        attention_html = (
-            "<tr><td colspan='3' class='empty'>Nothing down right now.</td></tr>\n"
+        outage_html = (
+            "<tr><td colspan='4' class='empty'>No outages right now.</td></tr>\n"
         )
 
-    all_rows_html = "".join(_status_row(c, u, False) for c, u in ok) + "".join(
-        _status_row(c, u, True) for c, u in down
+    if slow:
+        slow_html = "".join(_status_row(c, u, "slow", ds) for c, u, ds in slow)
+    else:
+        slow_html = (
+            "<tr><td colspan='4' class='empty'>Nothing running slow right now.</td></tr>\n"
+        )
+
+    all_rows_html = (
+        "".join(_status_row(c, u, "outage", ds) for c, u, ds in outages)
+        + "".join(_status_row(c, u, "slow", ds) for c, u, ds in slow)
+        + "".join(_status_row(c, u, "ok") for c, u in ok)
     )
 
     page = f"""<!DOCTYPE html>
@@ -266,25 +289,28 @@ def generate_status_page(companies, state):
 <title>Synthetic Monitor Status</title>
 <style>
   :root {{
-    --surface-1: #fcfcfb;
-    --page-plane: #f9f9f7;
-    --text-primary: #0b0b0b;
-    --text-secondary: #52514e;
-    --text-muted: #898781;
-    --gridline: #e1e0d9;
-    --border: rgba(11,11,11,0.10);
+    --surface-1: #fdfaf7;
+    --page-plane: #f7f2ee;
+    --text-primary: #23302c;
+    --text-secondary: #5c6560;
+    --text-muted: #8b8b85;
+    --gridline: #e5ded7;
+    --border: rgba(35,48,44,0.12);
+    --brand-accent: #c1603c;
     --status-good: #0ca30c;
+    --status-warning: #fab219;
     --status-critical: #d03b3b;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
-      --surface-1: #1a1a19;
-      --page-plane: #0d0d0d;
+      --surface-1: #212b27;
+      --page-plane: #1a221f;
       --text-primary: #ffffff;
-      --text-secondary: #c3c2b7;
-      --text-muted: #898781;
-      --gridline: #2c2c2a;
-      --border: rgba(255,255,255,0.10);
+      --text-secondary: #cdc7c1;
+      --text-muted: #9a948e;
+      --gridline: #34413c;
+      --border: rgba(255,255,255,0.12);
+      --brand-accent: #c1603c;
     }}
   }}
   * {{ box-sizing: border-box; }}
@@ -293,12 +319,13 @@ def generate_status_page(companies, state):
     background: var(--page-plane);
     color: var(--text-primary);
     margin: 0;
-    padding: 2.5rem 1.5rem 4rem;
+    padding: 0 0 4rem;
+    border-top: 6px solid var(--brand-accent);
   }}
-  .wrap {{ max-width: 880px; margin: 0 auto; }}
-  h1 {{ font-size: 1.1rem; font-weight: 600; margin: 0 0 0.2rem; }}
+  .wrap {{ max-width: 880px; margin: 0 auto; padding: 2.5rem 1.5rem 0; }}
+  h1 {{ font-size: 1.1rem; font-weight: 600; margin: 0 0 0.2rem; color: var(--brand-accent); letter-spacing: 0.01em; }}
   .meta {{ color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1.75rem; }}
-  .tiles {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-bottom: 2rem; }}
+  .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 2rem; }}
   .tile {{
     background: var(--surface-1);
     border: 1px solid var(--border);
@@ -307,8 +334,10 @@ def generate_status_page(companies, state):
   }}
   .tile .label {{ font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.3rem; }}
   .tile .value {{ font-size: 2rem; font-weight: 600; line-height: 1; }}
-  .tile.down .value {{ color: var(--status-critical); }}
+  .tile.outage .value {{ color: var(--status-critical); }}
+  .tile.slow {{ border-left: 3px solid var(--status-warning); }}
   .tile.ok .value {{ color: var(--status-good); }}
+  .tile:not(.outage):not(.slow):not(.ok) .value {{ color: var(--brand-accent); }}
   section {{ margin-bottom: 2rem; }}
   h2 {{ font-size: 0.95rem; font-weight: 600; margin: 0 0 0.75rem; }}
   table {{ border-collapse: collapse; width: 100%; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }}
@@ -316,12 +345,15 @@ def generate_status_page(companies, state):
   td {{ text-align: left; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--gridline); font-size: 0.9rem; }}
   tr:last-child td {{ border-bottom: none; }}
   td a {{ color: var(--text-secondary); text-decoration: none; }}
-  td a:hover {{ text-decoration: underline; }}
+  td a:hover {{ color: var(--brand-accent); text-decoration: underline; }}
+  td.duration {{ color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .empty {{ color: var(--text-muted); text-align: center; padding: 1.5rem; }}
   .pill {{ display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; font-weight: 600; }}
   .pill::before {{ content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
-  .pill-down {{ color: var(--status-critical); }}
-  .pill-down::before {{ background: var(--status-critical); }}
+  .pill-outage {{ color: var(--status-critical); }}
+  .pill-outage::before {{ background: var(--status-critical); }}
+  .pill-slow {{ color: var(--text-primary); }}
+  .pill-slow::before {{ background: var(--status-warning); }}
   .pill-ok {{ color: var(--status-good); }}
   .pill-ok::before {{ background: var(--status-good); }}
   input[type="search"] {{
@@ -329,6 +361,7 @@ def generate_status_page(companies, state):
     border: 1px solid var(--border); border-radius: 8px;
     background: var(--surface-1); color: var(--text-primary); font-size: 0.9rem;
   }}
+  input[type="search"]:focus {{ outline: none; border-color: var(--brand-accent); }}
   details summary {{ cursor: pointer; font-size: 0.95rem; font-weight: 600; padding: 0.4rem 0; }}
   tr.js-hidden {{ display: none; }}
 </style>
@@ -339,9 +372,13 @@ def generate_status_page(companies, state):
   <p class="meta">Generated {generated_at}</p>
 
   <div class="tiles">
-    <div class="tile down">
-      <div class="label">Down</div>
-      <div class="value">{len(down)}</div>
+    <div class="tile outage">
+      <div class="label">Outages</div>
+      <div class="value">{len(outages)}</div>
+    </div>
+    <div class="tile slow">
+      <div class="label">Slow</div>
+      <div class="value">{len(slow)}</div>
     </div>
     <div class="tile ok">
       <div class="label">Healthy</div>
@@ -354,10 +391,18 @@ def generate_status_page(companies, state):
   </div>
 
   <section>
-    <h2>Needs attention</h2>
+    <h2>Outages</h2>
     <table>
-      <tr><th>Company</th><th>URL</th><th>Status</th></tr>
-      {attention_html}
+      <tr><th>Company</th><th>URL</th><th>Status</th><th>Down for</th></tr>
+      {outage_html}
+    </table>
+  </section>
+
+  <section>
+    <h2>Slow</h2>
+    <table>
+      <tr><th>Company</th><th>URL</th><th>Status</th><th>Down for</th></tr>
+      {slow_html}
     </table>
   </section>
 
@@ -367,7 +412,7 @@ def generate_status_page(companies, state):
       <div style="margin-top: 0.85rem;">
         <input type="search" id="filter" placeholder="Filter by company name&hellip;">
         <table id="all-table">
-          <tr><th>Company</th><th>URL</th><th>Status</th></tr>
+          <tr><th>Company</th><th>URL</th><th>Status</th><th>Down for</th></tr>
           {all_rows_html}
         </table>
       </div>
@@ -391,27 +436,43 @@ def generate_status_page(companies, state):
 
 
 def deploy_status_page():
-    token = os.environ.get("NETLIFY_AUTH_TOKEN")
-    site_id = os.environ.get("NETLIFY_SITE_ID")
-    if not token or not site_id:
+    if not os.path.isdir(PAGES_WORKTREE_PATH):
         return
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(STATUS_PAGE_PATH, arcname="index.html")
-        zf.writestr("_headers", "/*\n  Content-Type: text/html; charset=utf-8\n")
+    now = datetime.now()
+    try:
+        with open(LAST_DEPLOY_PATH) as f:
+            last = datetime.strptime(f.read().strip(), "%Y-%m-%d %H:%M:%S")
+        if (now - last).total_seconds() < MIN_DEPLOY_INTERVAL_SECONDS:
+            return
+    except (FileNotFoundError, ValueError):
+        pass
+
+    shutil.copyfile(STATUS_PAGE_PATH, os.path.join(PAGES_WORKTREE_PATH, "index.html"))
+
+    status = subprocess.run(
+        ["git", "-C", PAGES_WORKTREE_PATH, "status", "--porcelain"],
+        capture_output=True, text=True,
+    )
+    if not status.stdout.strip():
+        return
 
     try:
-        requests.post(
-            f"https://api.netlify.com/api/v1/sites/{site_id}/deploys",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/zip",
-            },
-            data=buf.getvalue(),
-            timeout=30,
+        subprocess.run(
+            ["git", "-C", PAGES_WORKTREE_PATH, "add", "index.html"],
+            check=True, capture_output=True, timeout=15,
         )
-    except requests.exceptions.RequestException as e:
+        subprocess.run(
+            ["git", "-C", PAGES_WORKTREE_PATH, "commit", "-m", f"Update status page {now.strftime('%Y-%m-%d %H:%M:%S')}"],
+            check=True, capture_output=True, timeout=15,
+        )
+        subprocess.run(
+            ["git", "-C", PAGES_WORKTREE_PATH, "push"],
+            check=True, capture_output=True, timeout=30,
+        )
+        with open(LAST_DEPLOY_PATH, "w") as f:
+            f.write(now.strftime("%Y-%m-%d %H:%M:%S"))
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         print(f"  Failed to deploy status page: {e}")
 
 
@@ -420,19 +481,20 @@ def main():
     threshold = config["threshold_seconds"]
     http_timeout = config["http_timeout_seconds"]
     webhook_url = os.environ["SLACK_WEBHOOK_URL"]
-    model = config.get("claude_model", "haiku")
     consecutive_failures_required = config.get("consecutive_failures_required", 2)
     alert_on_slow = config.get("alert_on_slow", True)
-    claude_bin = find_claude_binary()
     state = load_state()
     companies = load_companies()
 
-    os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-
     for company, url in companies:
-        result = check_url(url, http_timeout)
+        result = check_url(url, http_timeout, company)
+        if is_outage(result):
+            time.sleep(30)
+            result = check_url(url, http_timeout, company)
         this_run_failed = is_outage(result) or result["elapsed"] > threshold
         previous_breached, consecutive_fails = get_previous_alert_state(state, company)
+        previous_entry = state.get(company, {})
+        down_since = previous_entry.get("down_since") if isinstance(previous_entry, dict) else None
         status = "OK" if not this_run_failed else "ALERT"
         print(
             f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {company}: "
@@ -464,20 +526,8 @@ def main():
         consecutive_fails += 1
         confirmed = consecutive_fails >= consecutive_failures_required
 
-        reason = None
         claude_status = ""
-        if confirmed and not previous_breached:
-            file_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            if claude_bin:
-                screenshot_path = take_screenshot(url, company, file_timestamp)
-                if screenshot_path:
-                    reason = analyze_screenshot(
-                        claude_bin, screenshot_path, company, url, result, model
-                    )
-            claude_status = "TRUE" if reason else "FALSE"
-
-        if not reason:
-            reason = fallback_reason(result, threshold)
+        reason = fallback_reason(result, threshold)
 
         log_result(
             {
@@ -491,16 +541,25 @@ def main():
             }
         )
 
+        is_down = is_outage(result)
+
         if not confirmed:
             state[company] = {"breached": False, "consecutive_fails": consecutive_fails}
             save_state(state)
             continue
 
-        state[company] = {"breached": True, "consecutive_fails": consecutive_fails}
+        if not previous_breached or not down_since:
+            down_since = timestamp_str
+
+        state[company] = {
+            "breached": True,
+            "consecutive_fails": consecutive_fails,
+            "is_outage": is_down,
+            "down_since": down_since,
+        }
         save_state(state)
 
         if not previous_breached:
-            is_down = is_outage(result)
             if is_down or alert_on_slow:
                 send_slack_alert(
                     webhook_url,

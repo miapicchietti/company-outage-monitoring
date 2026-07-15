@@ -1,8 +1,7 @@
 {
-  "threshold_seconds": 10,
+  "threshold_seconds": 3.5,
   "check_interval_minutes": 5,
-  "http_timeout_seconds": 15,
-  "claude_model": "haiku",
-  "consecutive_failures_required": 2,
+  "http_timeout_seconds": 30,
+  "consecutive_failures_required": 1,
   "alert_on_slow": false
 }

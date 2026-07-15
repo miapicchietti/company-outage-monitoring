@@ -15,12 +15,6 @@
     <dict>
         <key>SLACK_WEBHOOK_URL</key>
         <string>YOUR_SLACK_WEBHOOK_URL_HERE</string>
-        <key>NETLIFY_AUTH_TOKEN</key>
-        <string>YOUR_NETLIFY_PERSONAL_ACCESS_TOKEN_HERE</string>
-        <key>NETLIFY_SITE_ID</key>
-        <string>YOUR_NETLIFY_SITE_ID_HERE</string>
-        <key>NETLIFY_SITE_URL</key>
-        <string>YOUR_NETLIFY_SITE_URL_HERE</string>
     </dict>
     <key>StartInterval</key>
     <integer>300</integer>
