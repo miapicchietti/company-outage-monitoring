@@ -11,7 +11,6 @@ import socket
 import subprocess
 import sys
 import threading
-import time
 from datetime import datetime
 
 import urllib3.util.connection as urllib3_cn
@@ -112,6 +111,19 @@ def log_slow_trickle(company, url, true_elapsed, status_code, error):
             writer.writerow(row)
 
 
+def _classify_connection_error(e):
+    text = str(e)
+    if "NameResolutionError" in text or "nodename nor servname" in text or "Name or service not known" in text:
+        return "Connection Error: DNS Resolution Failed"
+    if "Connection refused" in text:
+        return "Connection Error: Connection Refused"
+    if "Connection reset" in text or "ConnectionResetError" in text:
+        return "Connection Error: Connection Reset"
+    if "EOF occurred" in text or "Connection aborted" in text:
+        return "Connection Error: Connection Aborted"
+    return "Connection Error"
+
+
 def _do_get(url, timeout, result_holder):
     try:
         resp = requests.get(
@@ -130,9 +142,12 @@ def _do_get(url, timeout, result_holder):
     except requests.exceptions.Timeout:
         result_holder["status_code"] = None
         result_holder["error"] = "Timeout"
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.SSLError as e:
         result_holder["status_code"] = None
-        result_holder["error"] = "Connection Error"
+        result_holder["error"] = f"SSL Error: {str(e)[:80]}"
+    except requests.exceptions.ConnectionError as e:
+        result_holder["status_code"] = None
+        result_holder["error"] = _classify_connection_error(e)
     except requests.exceptions.RequestException as e:
         result_holder["status_code"] = None
         result_holder["error"] = type(e).__name__
@@ -171,6 +186,30 @@ def check_url(url, timeout, company=None):
         "status_code": result_holder.get("status_code"),
         "error": result_holder.get("error"),
     }
+
+
+def browser_verify(url, timeout_seconds):
+    """Only called to double-check a confirmed 'Timeout' or 'Connection Error'
+    from check_url(). Loads the URL in an actual headless Chromium, the same
+    way a real visitor's browser would -- if it loads fine here, the plain
+    HTTP client's failure was a false positive (e.g. a quirk in its
+    connection handling that a real browser's networking stack doesn't hit)."""
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            try:
+                response = page.goto(url, timeout=timeout_seconds * 1000)
+                status = response.status if response else None
+                browser.close()
+                return {"loaded": True, "status_code": status}
+            except Exception:
+                browser.close()
+                return {"loaded": False, "status_code": None}
+    except Exception:
+        return {"loaded": False, "status_code": None}
 
 
 def log_result(row):
@@ -228,17 +267,47 @@ def format_down_duration(down_since):
     return f"{minutes}m"
 
 
-def _status_row(company, url, state_label, down_since=None):
+def _company_stats_text(entry):
+    total_checks = entry.get("total_checks", 0)
+    outage_count = entry.get("outage_count", 0)
+    response_time_sum = entry.get("response_time_sum", 0.0)
+    if not total_checks:
+        return None
+    avg_response = response_time_sum / total_checks
+    return f"Checked {total_checks}x | Down {outage_count}x | Avg response {avg_response:.2f}s"
+
+
+def _status_row(company, url, state_label, down_since=None, reason=None, stats_text=None, show_status=True, show_duration=True):
     company_esc = html.escape(company)
     url_esc = html.escape(url, quote=True)
     label = {"outage": "Down", "slow": "Slow", "ok": "OK"}[state_label]
     duration = format_down_duration(down_since) if state_label != "ok" else ""
+
+    detail_lines = []
+    if state_label == "outage" and reason:
+        detail_lines.append(html.escape(reason))
+    if stats_text:
+        detail_lines.append(html.escape(stats_text))
+
+    if detail_lines:
+        detail_html = "".join(f"<div class='reason-line'>{line}</div>" for line in detail_lines)
+        name_html = (
+            f"<span class='reason-details'>"
+            f"<span class='reason-name'>{company_esc}</span>"
+            f"<span class='reason-box'>{detail_html}</span>"
+            f"</span>"
+        )
+    else:
+        name_html = company_esc
+
+    status_cell = f"<td><span class='pill pill-{state_label}'>{label}</span></td>" if show_status else ""
+    duration_cell = f"<td class='duration'>{duration}</td>" if show_duration else ""
     return (
         f"<tr class='{state_label}' data-name='{company_esc.lower()}'>"
-        f"<td>{company_esc}</td>"
+        f"<td>{name_html}</td>"
         f"<td><a href='{url_esc}'>{url_esc}</a></td>"
-        f"<td><span class='pill pill-{state_label}'>{label}</span></td>"
-        f"<td class='duration'>{duration}</td>"
+        f"{status_cell}"
+        f"{duration_cell}"
         f"</tr>\n"
     )
 
@@ -249,36 +318,42 @@ def generate_status_page(companies, state):
     ok = []
     for company, url in companies:
         entry = state.get(company, {})
+        stats_text = _company_stats_text(entry) if isinstance(entry, dict) else None
         if isinstance(entry, dict) and entry.get("breached"):
             down_since = entry.get("down_since")
             if entry.get("is_outage", True):
-                outages.append((company, url, down_since))
+                outages.append((company, url, down_since, entry.get("reason"), stats_text))
             else:
-                slow.append((company, url, down_since))
+                slow.append((company, url, down_since, stats_text))
         else:
-            ok.append((company, url))
+            ok.append((company, url, stats_text))
 
     total = len(outages) + len(slow) + len(ok)
-    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    generated_at = datetime.now().astimezone().strftime("%-I:%M %p %Z")
 
     if outages:
-        outage_html = "".join(_status_row(c, u, "outage", ds) for c, u, ds in outages)
+        outage_html = "".join(
+            _status_row(c, u, "outage", ds, r, st, show_status=False) for c, u, ds, r, st in outages
+        )
     else:
         outage_html = (
-            "<tr><td colspan='4' class='empty'>No outages right now.</td></tr>\n"
+            "<tr><td colspan='3' class='empty'>No outages right now.</td></tr>\n"
         )
 
     if slow:
-        slow_html = "".join(_status_row(c, u, "slow", ds) for c, u, ds in slow)
+        slow_html = "".join(
+            _status_row(c, u, "slow", ds, None, st, show_status=False, show_duration=False)
+            for c, u, ds, st in slow
+        )
     else:
         slow_html = (
-            "<tr><td colspan='4' class='empty'>Nothing running slow right now.</td></tr>\n"
+            "<tr><td colspan='2' class='empty'>Nothing running slow right now.</td></tr>\n"
         )
 
     all_rows_html = (
-        "".join(_status_row(c, u, "outage", ds) for c, u, ds in outages)
-        + "".join(_status_row(c, u, "slow", ds) for c, u, ds in slow)
-        + "".join(_status_row(c, u, "ok") for c, u in ok)
+        "".join(_status_row(c, u, "outage", ds, r, st) for c, u, ds, r, st in outages)
+        + "".join(_status_row(c, u, "slow", ds, None, st) for c, u, ds, st in slow)
+        + "".join(_status_row(c, u, "ok", None, None, st) for c, u, st in ok)
     )
 
     page = f"""<!DOCTYPE html>
@@ -287,60 +362,76 @@ def generate_status_page(companies, state):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Synthetic Monitor Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;0,9..144,700;1,9..144,500&display=swap" rel="stylesheet">
 <style>
   :root {{
-    --surface-1: #fdfaf7;
-    --page-plane: #f7f2ee;
-    --text-primary: #23302c;
-    --text-secondary: #5c6560;
-    --text-muted: #8b8b85;
-    --gridline: #e5ded7;
-    --border: rgba(35,48,44,0.12);
-    --brand-accent: #c1603c;
+    --surface-1: #ffffff;
+    --page-plane: #faf8f6;
+    --text-primary: #1a1a1a;
+    --text-secondary: #5c5c5c;
+    --text-muted: #8a8a8a;
+    --gridline: #e5e3e0;
+    --border: rgba(26,26,26,0.10);
+    --brand-accent: #d2775a;
     --status-good: #0ca30c;
     --status-warning: #fab219;
     --status-critical: #d03b3b;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{
-      --surface-1: #212b27;
-      --page-plane: #1a221f;
-      --text-primary: #ffffff;
-      --text-secondary: #cdc7c1;
-      --text-muted: #9a948e;
-      --gridline: #34413c;
-      --border: rgba(255,255,255,0.12);
-      --brand-accent: #c1603c;
-    }}
+    --font-display: 'Fraunces', Georgia, serif;
   }}
   * {{ box-sizing: border-box; }}
   body {{
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    background: var(--page-plane);
+    background-color: var(--page-plane);
+    background-image: radial-gradient(rgba(26,26,26,0.06) 1px, transparent 1px);
+    background-size: 22px 22px;
     color: var(--text-primary);
     margin: 0;
     padding: 0 0 4rem;
-    border-top: 6px solid var(--brand-accent);
   }}
-  .wrap {{ max-width: 880px; margin: 0 auto; padding: 2.5rem 1.5rem 0; }}
-  h1 {{ font-size: 1.1rem; font-weight: 600; margin: 0 0 0.2rem; color: var(--brand-accent); letter-spacing: 0.01em; }}
-  .meta {{ color: var(--text-muted); font-size: 0.85rem; margin: 0 0 1.75rem; }}
+  .topnav {{ max-width: 880px; margin: 0 auto; padding: 1.5rem 1.5rem 0; display: flex; align-items: center; justify-content: space-between; }}
+  .wordmark {{ font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: 1.2rem; color: var(--text-primary); }}
+  .nav-pill {{
+    font-size: 0.8rem; font-weight: 600; color: var(--text-primary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    padding: 0.4rem 0.95rem; border-radius: 999px; text-decoration: none;
+  }}
+  .nav-pill:hover {{ border-color: var(--brand-accent); color: var(--brand-accent); }}
+  .header-band {{
+    background: linear-gradient(135deg, #c26a4d, #dc8a6c);
+    box-shadow: 0 16px 36px rgba(194,106,77,0.28);
+    padding: 2.5rem 2rem; width: calc(100% - 0.5rem); max-width: 880px;
+    margin: 1.5rem auto 2rem; border-radius: 20px;
+  }}
+  .header-inner {{ max-width: 880px; margin: 0 auto; padding: 0; }}
+  .wrap {{ max-width: 880px; margin: 0 auto; padding: 0 1.5rem; }}
+  .eyebrow {{
+    display: inline-block; background: rgba(26,26,26,0.82); color: #faf8f6;
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; padding: 0.32rem 0.75rem; border-radius: 999px;
+    margin-bottom: 0.9rem;
+  }}
+  h1 {{
+    font-family: var(--font-display); font-size: 2.5rem; font-weight: 700;
+    line-height: 1.04; margin: 0 0 0.4rem; color: #1a1a1a; letter-spacing: -0.01em;
+  }}
+  h1 .accent {{ font-style: italic; font-weight: 500; }}
+  .meta {{ color: rgba(26,26,26,0.65); font-size: 0.88rem; margin: 0; }}
   .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 2rem; }}
   .tile {{
     background: var(--surface-1);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 14px;
+    box-shadow: 0 1px 2px rgba(26,26,26,0.04), 0 8px 20px rgba(26,26,26,0.05);
     padding: 1rem 1.1rem;
   }}
   .tile .label {{ font-size: 0.78rem; color: var(--text-secondary); margin-bottom: 0.3rem; }}
-  .tile .value {{ font-size: 2rem; font-weight: 600; line-height: 1; }}
-  .tile.outage .value {{ color: var(--status-critical); }}
+  .tile .value {{ font-size: 2rem; font-weight: 600; line-height: 1; color: var(--text-primary); }}
   .tile.slow {{ border-left: 3px solid var(--status-warning); }}
-  .tile.ok .value {{ color: var(--status-good); }}
-  .tile:not(.outage):not(.slow):not(.ok) .value {{ color: var(--brand-accent); }}
   section {{ margin-bottom: 2rem; }}
   h2 {{ font-size: 0.95rem; font-weight: 600; margin: 0 0 0.75rem; }}
-  table {{ border-collapse: collapse; width: 100%; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }}
+  table {{ border-collapse: collapse; width: 100%; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(26,26,26,0.04), 0 8px 20px rgba(26,26,26,0.05); }}
   th {{ text-align: left; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--gridline); }}
   td {{ text-align: left; padding: 0.55rem 0.9rem; border-bottom: 1px solid var(--gridline); font-size: 0.9rem; }}
   tr:last-child td {{ border-bottom: none; }}
@@ -348,29 +439,70 @@ def generate_status_page(companies, state):
   td a:hover {{ color: var(--brand-accent); text-decoration: underline; }}
   td.duration {{ color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .empty {{ color: var(--text-muted); text-align: center; padding: 1.5rem; }}
-  .pill {{ display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; font-weight: 600; }}
-  .pill::before {{ content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
-  .pill-outage {{ color: var(--status-critical); }}
-  .pill-outage::before {{ background: var(--status-critical); }}
-  .pill-slow {{ color: var(--text-primary); }}
-  .pill-slow::before {{ background: var(--status-warning); }}
-  .pill-ok {{ color: var(--status-good); }}
-  .pill-ok::before {{ background: var(--status-good); }}
+  .pill {{
+    display: inline-flex; align-items: center; font-size: 0.72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.03em; padding: 0.22rem 0.65rem;
+    border-radius: 999px;
+  }}
+  .pill-outage {{ color: var(--status-critical); background: rgba(208,59,59,0.12); }}
+  .pill-slow {{ color: #8a5a00; background: rgba(250,178,25,0.18); }}
+  .pill-ok {{ color: var(--status-good); background: rgba(12,163,12,0.12); }}
   input[type="search"] {{
-    width: 100%; padding: 0.55rem 0.8rem; margin-bottom: 0.75rem;
-    border: 1px solid var(--border); border-radius: 8px;
+    width: 100%; padding: 0.6rem 1.05rem; margin-bottom: 0.75rem;
+    border: 1px solid var(--border); border-radius: 999px;
     background: var(--surface-1); color: var(--text-primary); font-size: 0.9rem;
   }}
   input[type="search"]:focus {{ outline: none; border-color: var(--brand-accent); }}
-  details summary {{ cursor: pointer; font-size: 0.95rem; font-weight: 600; padding: 0.4rem 0; }}
+  details summary {{ cursor: pointer; font-size: 0.95rem; font-weight: 600; padding: 0.4rem 0; display: flex; align-items: center; gap: 0.55rem; }}
+  .count-chip {{
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+    font-size: 0.75rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: rgba(26,26,26,0.07); color: var(--text-secondary);
+  }}
+  .count-chip.outage {{ background: rgba(208,59,59,0.12); color: var(--status-critical); }}
+  .count-chip.slow {{ background: rgba(250,178,25,0.18); color: #8a5a00; }}
   tr.js-hidden {{ display: none; }}
+  .reason-details {{ position: relative; }}
+  .reason-details .reason-name {{ cursor: default; }}
+  .reason-details:hover .reason-name {{ text-decoration: underline dotted; }}
+  .reason-details .reason-box {{
+    display: none;
+    position: absolute;
+    left: calc(100% + 0.6rem);
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+    white-space: nowrap;
+    z-index: 20;
+  }}
+  .reason-details:hover .reason-box {{
+    display: block;
+  }}
+  .reason-details .reason-line {{
+    display: block;
+    font-size: 0.8rem; font-weight: 400; color: var(--text-secondary);
+  }}
+  .reason-details .reason-line + .reason-line {{ margin-top: 0.3rem; }}
 </style>
 </head>
 <body>
+<div class="topnav">
+  <span class="wordmark">Synthetic Monitor</span>
+  <a class="nav-pill" href="https://github.com/miapicchietti/company-outage-monitoring" target="_blank" rel="noopener">View source</a>
+</div>
+<div class="header-band">
+  <div class="header-inner">
+    <span class="eyebrow">Automated &middot; every 5 min</span>
+    <h1>Synthetic Monitor<br><span class="accent">Status.</span></h1>
+    <p class="meta">Last updated: {generated_at}</p>
+  </div>
+</div>
 <div class="wrap">
-  <h1>Synthetic Monitor Status</h1>
-  <p class="meta">Generated {generated_at}</p>
-
   <div class="tiles">
     <div class="tile outage">
       <div class="label">Outages</div>
@@ -391,24 +523,28 @@ def generate_status_page(companies, state):
   </div>
 
   <section>
-    <h2>Outages</h2>
-    <table>
-      <tr><th>Company</th><th>URL</th><th>Status</th><th>Down for</th></tr>
-      {outage_html}
-    </table>
+    <details open>
+      <summary>Outages <span class="count-chip outage">{len(outages)}</span></summary>
+      <table style="margin-top: 0.75rem;">
+        <tr><th>Company</th><th>URL</th><th>Down for</th></tr>
+        {outage_html}
+      </table>
+    </details>
   </section>
 
   <section>
-    <h2>Slow</h2>
-    <table>
-      <tr><th>Company</th><th>URL</th><th>Status</th><th>Down for</th></tr>
-      {slow_html}
-    </table>
+    <details open>
+      <summary>Slow <span class="count-chip slow">{len(slow)}</span></summary>
+      <table style="margin-top: 0.75rem;">
+        <tr><th>Company</th><th>URL</th></tr>
+        {slow_html}
+      </table>
+    </details>
   </section>
 
   <section>
     <details>
-      <summary>All {total} monitored companies</summary>
+      <summary>All monitored companies <span class="count-chip">{total}</span></summary>
       <div style="margin-top: 0.85rem;">
         <input type="search" id="filter" placeholder="Filter by company name&hellip;">
         <table id="all-table">
@@ -488,13 +624,26 @@ def main():
 
     for company, url in companies:
         result = check_url(url, http_timeout, company)
-        if is_outage(result):
-            time.sleep(30)
-            result = check_url(url, http_timeout, company)
+        if result["error"] == "Timeout" or (result["error"] and result["error"].startswith("Connection Error")):
+            browser_result = browser_verify(url, http_timeout)
+            if browser_result["loaded"]:
+                # A real browser loaded it fine -- the HTTP client's failure
+                # was a false positive, not a genuine outage.
+                result = {
+                    "elapsed": result["elapsed"],
+                    "status_code": browser_result["status_code"],
+                    "error": None,
+                }
         this_run_failed = is_outage(result) or result["elapsed"] > threshold
         previous_breached, consecutive_fails = get_previous_alert_state(state, company)
         previous_entry = state.get(company, {})
         down_since = previous_entry.get("down_since") if isinstance(previous_entry, dict) else None
+        previous_is_outage = previous_entry.get("is_outage", False) if isinstance(previous_entry, dict) else False
+        total_checks = previous_entry.get("total_checks", 0) + 1 if isinstance(previous_entry, dict) else 1
+        response_time_sum = (
+            previous_entry.get("response_time_sum", 0.0) if isinstance(previous_entry, dict) else 0.0
+        ) + result["elapsed"]
+        outage_count = previous_entry.get("outage_count", 0) if isinstance(previous_entry, dict) else 0
         status = "OK" if not this_run_failed else "ALERT"
         print(
             f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {company}: "
@@ -516,7 +665,13 @@ def main():
                     "claude_analysis": "",
                 }
             )
-            state[company] = {"breached": False, "consecutive_fails": 0}
+            state[company] = {
+                "breached": False,
+                "consecutive_fails": 0,
+                "total_checks": total_checks,
+                "response_time_sum": response_time_sum,
+                "outage_count": outage_count,
+            }
             save_state(state)
             if previous_breached:
                 generate_status_page(companies, state)
@@ -544,18 +699,32 @@ def main():
         is_down = is_outage(result)
 
         if not confirmed:
-            state[company] = {"breached": False, "consecutive_fails": consecutive_fails}
+            state[company] = {
+                "breached": False,
+                "consecutive_fails": consecutive_fails,
+                "total_checks": total_checks,
+                "response_time_sum": response_time_sum,
+                "outage_count": outage_count,
+            }
             save_state(state)
             continue
 
-        if not previous_breached or not down_since:
-            down_since = timestamp_str
+        if is_down:
+            if not previous_is_outage or not down_since:
+                down_since = timestamp_str
+                outage_count += 1
+        else:
+            down_since = None
 
         state[company] = {
             "breached": True,
             "consecutive_fails": consecutive_fails,
             "is_outage": is_down,
             "down_since": down_since,
+            "reason": reason,
+            "total_checks": total_checks,
+            "response_time_sum": response_time_sum,
+            "outage_count": outage_count,
         }
         save_state(state)
 
