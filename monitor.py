@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic monitoring: times each company's homepage and alerts to Slack."""
 
+import base64
 import csv
 import fcntl
 import html
@@ -11,6 +12,8 @@ import socket
 import subprocess
 import sys
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import urllib3.util.connection as urllib3_cn
@@ -36,7 +39,7 @@ LOCK_PATH = os.path.join(BASE_DIR, "monitor.lock")
 STATUS_PAGE_PATH = os.path.join(BASE_DIR, "status.html")
 PAGES_WORKTREE_PATH = os.path.join(BASE_DIR, ".pages-worktree")
 LAST_DEPLOY_PATH = os.path.join(BASE_DIR, ".last_deploy")
-MIN_DEPLOY_INTERVAL_SECONDS = 180
+MIN_DEPLOY_INTERVAL_SECONDS = 60
 CSV_FIELDS = [
     "timestamp",
     "url",
@@ -46,6 +49,25 @@ CSV_FIELDS = [
     "claude_status",
     "claude_analysis",
 ]
+
+# Tiled overlapping-circle background pattern for the dashboard: varied circle
+# sizes in one repeating 760x760 tile, mirrored across edges so it tiles
+# seamlessly, with enough gap between circles for the cream wash to show through.
+_BG_PATTERN_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="760" height="760">
+<circle cx="0" cy="0" r="220" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="760" cy="0" r="220" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="0" cy="760" r="220" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="760" cy="760" r="220" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="0" cy="400" r="200" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="760" cy="400" r="200" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="250" cy="0" r="180" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="250" cy="760" r="180" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="560" cy="0" r="160" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="560" cy="760" r="160" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="420" cy="300" r="240" fill="#ffffff" fill-opacity="0.6"/>
+<circle cx="180" cy="550" r="190" fill="#ffffff" fill-opacity="0.6"/>
+</svg>"""
+BG_PATTERN_B64 = base64.b64encode(_BG_PATTERN_SVG.encode()).decode()
 
 
 def load_state():
@@ -204,12 +226,12 @@ def browser_verify(url, timeout_seconds):
                 response = page.goto(url, timeout=timeout_seconds * 1000)
                 status = response.status if response else None
                 browser.close()
-                return {"loaded": True, "status_code": status}
-            except Exception:
+                return {"loaded": True, "status_code": status, "error": None}
+            except Exception as e:
                 browser.close()
-                return {"loaded": False, "status_code": None}
-    except Exception:
-        return {"loaded": False, "status_code": None}
+                return {"loaded": False, "status_code": None, "error": f"{type(e).__name__}: {str(e)[:150]}"}
+    except Exception as e:
+        return {"loaded": False, "status_code": None, "error": f"{type(e).__name__}: {str(e)[:150]}"}
 
 
 def log_result(row):
@@ -384,8 +406,11 @@ def generate_status_page(companies, state):
   body {{
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     background-color: var(--page-plane);
-    background-image: radial-gradient(rgba(26,26,26,0.06) 1px, transparent 1px);
-    background-size: 22px 22px;
+    background-image:
+      url("data:image/svg+xml;base64,{BG_PATTERN_B64}"),
+      linear-gradient(135deg, #efd8c1 0%, #f7f4ef 45%, #f3d5c2 100%);
+    background-size: 760px 760px, cover;
+    background-attachment: fixed, fixed;
     color: var(--text-primary);
     margin: 0;
     padding: 0 0 4rem;
@@ -416,7 +441,6 @@ def generate_status_page(companies, state):
     font-family: var(--font-display); font-size: 2.5rem; font-weight: 700;
     line-height: 1.04; margin: 0 0 0.4rem; color: #1a1a1a; letter-spacing: -0.01em;
   }}
-  h1 .accent {{ font-style: italic; font-weight: 500; }}
   .meta {{ color: rgba(26,26,26,0.65); font-size: 0.88rem; margin: 0; }}
   .tiles {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 2rem; }}
   .tile {{
@@ -498,7 +522,7 @@ def generate_status_page(companies, state):
 <div class="header-band">
   <div class="header-inner">
     <span class="eyebrow">Automated &middot; every 5 min</span>
-    <h1>Synthetic Monitor<br><span class="accent">Status.</span></h1>
+    <h1>Synthetic Monitor<br><span class="accent">Status</span></h1>
     <p class="meta">Last updated: {generated_at}</p>
   </div>
 </div>
@@ -612,6 +636,31 @@ def deploy_status_page():
         print(f"  Failed to deploy status page: {e}")
 
 
+def run_company_check(company, url, http_timeout):
+    """Runs entirely off shared state -- safe to call concurrently from a
+    thread pool. Does the actual check plus any Timeout/Connection Error
+    verification, and returns the result plus any diagnostic lines to print.
+    All state/log/Slack/deploy handling happens back on the main thread."""
+    log_lines = []
+    result = check_url(url, http_timeout, company)
+    if result["error"] == "Timeout":
+        time.sleep(30)
+        result = check_url(url, http_timeout, company)
+    if result["error"] == "Timeout" or (result["error"] and result["error"].startswith("Connection Error")):
+        browser_result = browser_verify(url, http_timeout)
+        if browser_result["loaded"]:
+            # A real browser loaded it fine -- the HTTP client's failure
+            # was a false positive, not a genuine outage.
+            result = {
+                "elapsed": result["elapsed"],
+                "status_code": browser_result["status_code"],
+                "error": None,
+            }
+        else:
+            log_lines.append(f"  Playwright verification also failed for {company}: {browser_result['error']}")
+    return result, log_lines
+
+
 def main():
     config = load_config()
     threshold = config["threshold_seconds"]
@@ -619,128 +668,132 @@ def main():
     webhook_url = os.environ["SLACK_WEBHOOK_URL"]
     consecutive_failures_required = config.get("consecutive_failures_required", 2)
     alert_on_slow = config.get("alert_on_slow", True)
+    max_concurrent_checks = config.get("max_concurrent_checks", 1)
     state = load_state()
     companies = load_companies()
 
-    for company, url in companies:
-        result = check_url(url, http_timeout, company)
-        if result["error"] == "Timeout" or (result["error"] and result["error"].startswith("Connection Error")):
-            browser_result = browser_verify(url, http_timeout)
-            if browser_result["loaded"]:
-                # A real browser loaded it fine -- the HTTP client's failure
-                # was a false positive, not a genuine outage.
-                result = {
-                    "elapsed": result["elapsed"],
-                    "status_code": browser_result["status_code"],
-                    "error": None,
+    with ThreadPoolExecutor(max_workers=max_concurrent_checks) as executor:
+        futures = {
+            executor.submit(run_company_check, company, url, http_timeout): (company, url)
+            for company, url in companies
+        }
+        for future in as_completed(futures):
+            company, url = futures[future]
+            try:
+                result, log_lines = future.result()
+            except Exception as e:
+                print(f"  Unexpected error checking {company}: {e}")
+                continue
+            for line in log_lines:
+                print(line)
+
+            this_run_failed = is_outage(result) or result["elapsed"] > threshold
+            previous_breached, consecutive_fails = get_previous_alert_state(state, company)
+            previous_entry = state.get(company, {})
+            down_since = previous_entry.get("down_since") if isinstance(previous_entry, dict) else None
+            previous_is_outage = previous_entry.get("is_outage", False) if isinstance(previous_entry, dict) else False
+            total_checks = previous_entry.get("total_checks", 0) + 1 if isinstance(previous_entry, dict) else 1
+            response_time_sum = (
+                previous_entry.get("response_time_sum", 0.0) if isinstance(previous_entry, dict) else 0.0
+            ) + result["elapsed"]
+            outage_count = previous_entry.get("outage_count", 0) if isinstance(previous_entry, dict) else 0
+            status = "OK" if not this_run_failed else "ALERT"
+            print(
+                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {company}: "
+                f"{result['elapsed']:.2f}s status={result['status_code']} "
+                f"error={result['error']} -> {status}"
+            )
+
+            timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if not this_run_failed:
+                log_result(
+                    {
+                        "timestamp": timestamp_str,
+                        "url": url,
+                        "http_status": result["status_code"] or "",
+                        "response_time_s": f"{result['elapsed']:.3f}",
+                        "slow": "FALSE",
+                        "claude_status": "",
+                        "claude_analysis": "",
+                    }
+                )
+                state[company] = {
+                    "breached": False,
+                    "consecutive_fails": 0,
+                    "total_checks": total_checks,
+                    "response_time_sum": response_time_sum,
+                    "outage_count": outage_count,
                 }
-        this_run_failed = is_outage(result) or result["elapsed"] > threshold
-        previous_breached, consecutive_fails = get_previous_alert_state(state, company)
-        previous_entry = state.get(company, {})
-        down_since = previous_entry.get("down_since") if isinstance(previous_entry, dict) else None
-        previous_is_outage = previous_entry.get("is_outage", False) if isinstance(previous_entry, dict) else False
-        total_checks = previous_entry.get("total_checks", 0) + 1 if isinstance(previous_entry, dict) else 1
-        response_time_sum = (
-            previous_entry.get("response_time_sum", 0.0) if isinstance(previous_entry, dict) else 0.0
-        ) + result["elapsed"]
-        outage_count = previous_entry.get("outage_count", 0) if isinstance(previous_entry, dict) else 0
-        status = "OK" if not this_run_failed else "ALERT"
-        print(
-            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {company}: "
-            f"{result['elapsed']:.2f}s status={result['status_code']} "
-            f"error={result['error']} -> {status}"
-        )
+                save_state(state)
+                if previous_breached:
+                    generate_status_page(companies, state)
+                    deploy_status_page()
+                continue
 
-        timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            consecutive_fails += 1
+            confirmed = consecutive_fails >= consecutive_failures_required
 
-        if not this_run_failed:
+            claude_status = ""
+            reason = fallback_reason(result, threshold)
+
             log_result(
                 {
                     "timestamp": timestamp_str,
                     "url": url,
-                    "http_status": result["status_code"] or "",
+                    "http_status": result["status_code"],
                     "response_time_s": f"{result['elapsed']:.3f}",
-                    "slow": "FALSE",
-                    "claude_status": "",
-                    "claude_analysis": "",
+                    "slow": "TRUE",
+                    "claude_status": claude_status,
+                    "claude_analysis": reason,
                 }
             )
+
+            is_down = is_outage(result)
+
+            if not confirmed:
+                state[company] = {
+                    "breached": False,
+                    "consecutive_fails": consecutive_fails,
+                    "total_checks": total_checks,
+                    "response_time_sum": response_time_sum,
+                    "outage_count": outage_count,
+                }
+                save_state(state)
+                continue
+
+            if is_down:
+                if not previous_is_outage or not down_since:
+                    down_since = timestamp_str
+                    outage_count += 1
+            else:
+                down_since = None
+
             state[company] = {
-                "breached": False,
-                "consecutive_fails": 0,
+                "breached": True,
+                "consecutive_fails": consecutive_fails,
+                "is_outage": is_down,
+                "down_since": down_since,
+                "reason": reason,
                 "total_checks": total_checks,
                 "response_time_sum": response_time_sum,
                 "outage_count": outage_count,
             }
             save_state(state)
-            if previous_breached:
+
+            if not previous_breached:
+                if is_down or alert_on_slow:
+                    send_slack_alert(
+                        webhook_url,
+                        company,
+                        url,
+                        reason,
+                        is_down,
+                        result["elapsed"],
+                        threshold,
+                    )
                 generate_status_page(companies, state)
                 deploy_status_page()
-            continue
-
-        consecutive_fails += 1
-        confirmed = consecutive_fails >= consecutive_failures_required
-
-        claude_status = ""
-        reason = fallback_reason(result, threshold)
-
-        log_result(
-            {
-                "timestamp": timestamp_str,
-                "url": url,
-                "http_status": result["status_code"],
-                "response_time_s": f"{result['elapsed']:.3f}",
-                "slow": "TRUE",
-                "claude_status": claude_status,
-                "claude_analysis": reason,
-            }
-        )
-
-        is_down = is_outage(result)
-
-        if not confirmed:
-            state[company] = {
-                "breached": False,
-                "consecutive_fails": consecutive_fails,
-                "total_checks": total_checks,
-                "response_time_sum": response_time_sum,
-                "outage_count": outage_count,
-            }
-            save_state(state)
-            continue
-
-        if is_down:
-            if not previous_is_outage or not down_since:
-                down_since = timestamp_str
-                outage_count += 1
-        else:
-            down_since = None
-
-        state[company] = {
-            "breached": True,
-            "consecutive_fails": consecutive_fails,
-            "is_outage": is_down,
-            "down_since": down_since,
-            "reason": reason,
-            "total_checks": total_checks,
-            "response_time_sum": response_time_sum,
-            "outage_count": outage_count,
-        }
-        save_state(state)
-
-        if not previous_breached:
-            if is_down or alert_on_slow:
-                send_slack_alert(
-                    webhook_url,
-                    company,
-                    url,
-                    reason,
-                    is_down,
-                    result["elapsed"],
-                    threshold,
-                )
-            generate_status_page(companies, state)
-            deploy_status_page()
 
     save_state(state)
     generate_status_page(companies, state)

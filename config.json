@@ -3,5 +3,6 @@
   "check_interval_minutes": 5,
   "http_timeout_seconds": 30,
   "consecutive_failures_required": 1,
-  "alert_on_slow": false
+  "alert_on_slow": false,
+  "max_concurrent_checks": 20
 }
