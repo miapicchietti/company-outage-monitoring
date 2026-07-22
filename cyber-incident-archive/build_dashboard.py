@@ -8,6 +8,8 @@ from build_data import load_events
 EVENTS = load_events()
 EVENTS_BY_YEAR_DESC = sorted(EVENTS, key=lambda e: (e["year"], e["reported_date"]), reverse=True)
 
+# cmc_category/cmc_population computed below, after CMC Scale helpers are defined.
+
 # Fixed categorical palette, one hue per Event Type, assigned in a fixed order
 # (never cycled/reassigned by filter) and deliberately distinct from any
 # status-style red/amber/green semantics -- this dataset has no "state", just
@@ -21,6 +23,105 @@ CATEGORY_COLORS = {
 }
 CATEGORY_ORDER = ["Ransomware", "Data Breach", "Worm/Malware", "DDoS", "Other"]
 
+# ---------------- The CMC Scale ----------------
+# Recreates the Cyber Monitoring Centre's Category 0-5 severity matrix
+# (financial impact x affected population). Grid indices: row 0 = smallest
+# financial-impact band (bottom of the exhibit) up to row 4 (largest, top);
+# col 0 = smallest affected-population band (left) up to col 4 (largest,
+# right). None = combination the exhibit leaves blank (financial impact and
+# affected population that far apart essentially don't occur).
+CMC_FIN_BANDS = [10, 100, 1000, 5000]  # £m upper bounds for rows 0-3; row 4 is ">5000"
+CMC_POP_BANDS = [270, 2700, 27000, 136000]  # upper bounds for cols 0-3; col 4 is ">136000"
+CMC_SCALE_GRID = [
+    [0, 1, 2, None, None],   # row 0: <£10m
+    [1, 1, 2, 2, None],      # row 1: £10m-£100m
+    [2, 2, 2, 3, 4],         # row 2: £100m-£1bn
+    [2, 2, 3, 4, 4],         # row 3: £1bn-£5bn
+    [3, 3, 4, 4, 5],         # row 4: >£5bn
+]
+CMC_CAT_COLORS = {
+    0: ("#4a5450", "#f2ece1"),
+    1: ("#7a5a45", "#f2ece1"),
+    2: ("#a06a3f", "#f2ece1"),
+    3: ("#c2753f", "#f2ece1"),
+    4: ("#d97a4a", "#1b120c"),
+    5: ("#9c3f22", "#f2ece1"),
+}
+
+_POP_KEYWORDS = re.compile(
+    r"(customers?|individuals?|accounts?|records?|users?|members?|people|residents?|"
+    r"devices?|hosts?|servers?|employees?|patients?|voters?|students?|subscribers?|"
+    r"victims?|organi[sz]ations?|orgs?|businesses?|companies|institutions?|guests?|"
+    r"downloads?|drivers?|passengers?|clients?)"
+)
+_NUM_RE = re.compile(r"([\d][\d,]*\.?\d*)\s*(million|billion|thousand|k\b|m\b|bn\b)?(%?)", re.I)
+
+
+def _parse_population(raw):
+    """Best-effort: pull the largest number followed by a population-ish
+    word ('customers', 'individuals', 'organizations', ...) out of the free-
+    text 'Number of Impacted entities/systems' field. Falls back to the
+    largest number in the string if no such word is nearby. Inherently
+    approximate -- this field mixes people-counts, org-counts, and device-
+    counts with no fixed schema."""
+    if not raw:
+        return None
+    low = raw.lower()
+    keyword_candidates = []
+    all_candidates = []
+    for m in _NUM_RE.finditer(low):
+        num_str, suffix, pct = m.groups()
+        if pct == "%":
+            continue
+        try:
+            num = float(num_str.replace(",", ""))
+        except ValueError:
+            continue
+        if suffix:
+            suffix = suffix.lower()
+            if suffix.startswith("million") or suffix == "m":
+                num *= 1_000_000
+            elif suffix.startswith("billion") or suffix == "bn":
+                num *= 1_000_000_000
+            elif suffix.startswith("thousand") or suffix == "k":
+                num *= 1_000
+        if num < 1:
+            continue
+        all_candidates.append(num)
+        if _POP_KEYWORDS.search(low[m.end():m.end() + 25]):
+            keyword_candidates.append(num)
+    if keyword_candidates:
+        return max(keyword_candidates)
+    return max(all_candidates) if all_candidates else None
+
+
+def _band_index(value, bounds):
+    for i, bound in enumerate(bounds):
+        if value < bound:
+            return i
+    return len(bounds)
+
+
+def cmc_category(financial_impact_m, population):
+    if financial_impact_m is None or population is None:
+        return None
+    row = _band_index(financial_impact_m, CMC_FIN_BANDS)
+    col = _band_index(population, CMC_POP_BANDS)
+    cat = CMC_SCALE_GRID[row][col]
+    if cat is not None:
+        return cat
+    # Blank cell in the exhibit (implausible combination) -- fall back to the
+    # nearest defined category to the left in the same row.
+    for c in range(col - 1, -1, -1):
+        if CMC_SCALE_GRID[row][c] is not None:
+            return CMC_SCALE_GRID[row][c]
+    return None
+
+
+for _e in EVENTS:
+    _e["cmc_population"] = _parse_population(_e["number_impacted"])
+    _e["cmc_category"] = cmc_category(_e["total_financial_impact"], _e["cmc_population"])
+
 
 def esc(s):
     return htmlmod.escape(str(s)) if s is not None else ""
@@ -32,6 +133,13 @@ def money(v, force_sign=False):
     if v >= 1000:
         return f"£{v/1000:.2f}bn"
     return f"£{v:.1f}m"
+
+
+def cmc_badge_html(cat):
+    if cat is None:
+        return '<span class="cmc-badge cmc-badge-none">&mdash;</span>'
+    bg, fg = CMC_CAT_COLORS[cat]
+    return f'<span class="cmc-badge" style="background:{bg};color:{fg}">Cat {cat}</span>'
 
 
 # ---------------- KPIs ----------------
@@ -286,6 +394,7 @@ events_json = json.dumps([{
     },
     "stock_original": e["stock_original"], "stock_trough": e["stock_trough"],
     "stock_pct_decrease": e["stock_pct_decrease"], "stock_recovery_time": e["stock_recovery_time"],
+    "cmc_category": e["cmc_category"],
 } for e in EVENTS_BY_YEAR_DESC])
 
 # ---------------- Sectors & Actors tab ----------------
@@ -351,6 +460,7 @@ report_rows = "".join(f'''
   <td class="muted">{esc(e["primary_country"] or "&mdash;")}</td>
   <td>{'Yes' if e["nation_state"] else 'No'}</td>
   <td class="mono num" data-sort="{e["total_financial_impact"] if e["total_financial_impact"] is not None else -1}">{money(e["total_financial_impact"])}</td>
+  <td class="num" data-sort="{e["cmc_category"] if e["cmc_category"] is not None else -1}">{cmc_badge_html(e["cmc_category"])}</td>
 </tr>''' for e in EVENTS_BY_YEAR_DESC)
 
 # ---------------- Insights tab ----------------
@@ -366,6 +476,25 @@ playbook_cards = "".join(f'''
 
 ns_playbook_html = "".join(f"<li>{esc(item)}</li>" for item in NS_PLAYBOOK)
 criminal_playbook_html = "".join(f"<li>{esc(item)}</li>" for item in CRIMINAL_PLAYBOOK)
+
+# The CMC Scale reference exhibit -- financial impact (rows, high to low)
+# x affected population (columns, low to high), recreating the source chart.
+CMC_ROW_LABELS = ["<£10m", "£10m–£100m", "£100m–£1bn", "£1bn–£5bn", ">£5bn"]
+CMC_COL_LABELS = ["<270", "270–2.7k", "2.7k–27k", "27k–136k", ">136k"]
+
+cmc_grid_cells = ""
+for row in [4, 3, 2, 1, 0]:
+    cmc_grid_cells += f'<div class="cmc-row-label">{esc(CMC_ROW_LABELS[row])}</div>'
+    for col in range(5):
+        cat = CMC_SCALE_GRID[row][col]
+        if cat is None:
+            cmc_grid_cells += '<div class="cmc-cell cmc-cell-blank"></div>'
+        else:
+            bg, fg = CMC_CAT_COLORS[cat]
+            cmc_grid_cells += f'<div class="cmc-cell" style="background:{bg};color:{fg}">Cat {cat}</div>'
+cmc_grid_cells += '<div></div>' + "".join(f'<div class="cmc-col-label">{esc(lbl)}</div>' for lbl in CMC_COL_LABELS)
+
+cmc_classified_count = sum(1 for e in EVENTS if e["cmc_category"] is not None)
 
 PAGE = f"""<!DOCTYPE html>
 <html>
@@ -460,6 +589,15 @@ h1, h2, h3 {{ font-family: var(--font-display); font-weight: 600; margin: 0; tex
 .playbook-list {{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }}
 .playbook-list li {{ font-size: 12.5px; color: var(--text); line-height: 1.55; padding-left: 18px; position: relative; }}
 .playbook-list li::before {{ content: ""; position: absolute; left: 0; top: 6px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }}
+.cmc-scale-layout {{ display: flex; align-items: stretch; gap: 8px; }}
+.cmc-axis-label {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); font-weight: 700; }}
+.cmc-axis-y {{ writing-mode: vertical-rl; transform: rotate(180deg); flex: none; display: flex; align-items: center; justify-content: center; padding-bottom: 4px; }}
+.cmc-axis-x {{ text-align: center; margin-top: 6px; }}
+.cmc-scale-grid {{ flex: 1; display: grid; grid-template-columns: 110px repeat(5, 1fr); gap: 4px; max-width: 640px; }}
+.cmc-row-label {{ display: flex; align-items: center; font-size: 11px; color: var(--text-faint); white-space: nowrap; }}
+.cmc-cell {{ aspect-ratio: 1.4; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; border-radius: 6px; }}
+.cmc-cell-blank {{ background: transparent; }}
+.cmc-col-label {{ text-align: center; font-size: 10px; color: var(--text-faint); padding-top: 4px; }}
 .mosaic {{ display: flex; flex-wrap: wrap; gap: 3px; max-height: 168px; overflow: hidden; align-content: flex-start; }}
 .cell {{ width: 9px; height: 9px; border-radius: 2px; }}
 .mosaic-legend {{ display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 11.5px; color: var(--text-muted); }}
@@ -482,6 +620,8 @@ th.sortable {{ cursor: pointer; user-select: none; }}
 th.sortable:hover {{ color: var(--text); }}
 td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }}
 .cat-chip {{ font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 5px; white-space: nowrap; }}
+.cmc-badge {{ font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; display: inline-block; }}
+.cmc-badge-none {{ background: transparent; color: var(--text-faint); }}
 .table-scroll {{ max-height: 400px; overflow-y: auto; }}
 .alerts-grid {{ display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }}
 .alert-list {{ list-style: none; margin: 0; padding: 0; max-height: 74vh; overflow-y: auto; }}
@@ -752,6 +892,19 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
       </div>
     </div>
 
+    <div class="card" style="margin-top: 14px;">
+      <div class="section-title">The CMC Scale</div>
+      <div class="cmc-scale-layout">
+        <div class="cmc-axis-label cmc-axis-y">Financial impact</div>
+        <div class="cmc-scale-grid">{cmc_grid_cells}</div>
+      </div>
+      <div class="cmc-axis-label cmc-axis-x">Affected population</div>
+      <div class="kpi-foot" style="margin-top:14px;">
+        {cmc_classified_count} of {total_events} incidents could be classified against this scale &mdash; the rest lack a disclosed financial figure, a parseable affected-population figure, or both.
+        Population is a best-effort estimate pulled from each incident's free-text impact description, so treat exact category boundaries as approximate.
+      </div>
+    </div>
+
     <div class="kpi-foot" style="margin-top:14px;">
       These are general best-practice recommendations grounded in patterns across the {total_events} tracked incidents &mdash; not a live assessment of any specific organization's systems.
     </div>
@@ -794,6 +947,7 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
               <th>Country</th>
               <th>Nation-state</th>
               <th class="sortable" data-key="num">Financial impact</th>
+              <th class="sortable" data-key="num">CMC Cat</th>
             </tr>
           </thead>
           <tbody id="reportBody">{report_rows}</tbody>
@@ -874,7 +1028,10 @@ function renderIncidentDetail(idx) {{
         <div class="detail-name">${{e.event_name}}</div>
         <div class="detail-meta">${{e.year}} &middot; ${{e.sector}} &middot; ${{e.country || 'Unknown'}}</div>
       </div>
-      <span class="cat-chip" style="color:${{CATEGORY_COLORS[e.category]}};background:${{CATEGORY_COLORS[e.category]}}22">${{e.category}}</span>
+      <div style="display:flex; gap:6px; flex:none;">
+        <span class="cat-chip" style="color:${{CATEGORY_COLORS[e.category]}};background:${{CATEGORY_COLORS[e.category]}}22">${{e.category}}</span>
+        ${{cmcBadgeHtml(e.cmc_category)}}
+      </div>
     </div>
     <p class="detail-desc">${{e.description}}</p>
     <div class="detail-stats">
@@ -903,6 +1060,13 @@ function renderIncidentDetail(idx) {{
 }}
 
 const CATEGORY_COLORS = {json.dumps(CATEGORY_COLORS)};
+const CMC_CAT_COLORS = {json.dumps(CMC_CAT_COLORS)};
+
+function cmcBadgeHtml(cat) {{
+  if (cat == null) return '<span class="cmc-badge cmc-badge-none">Not classified</span>';
+  const [bg, fg] = CMC_CAT_COLORS[cat];
+  return `<span class="cmc-badge" style="background:${{bg}};color:${{fg}}">Cat ${{cat}}</span>`;
+}}
 
 document.querySelectorAll('.alert-row').forEach(row => {{
   row.addEventListener('click', (e) => {{
