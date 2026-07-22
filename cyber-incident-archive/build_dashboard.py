@@ -13,15 +13,39 @@ EVENTS_BY_YEAR_DESC = sorted(EVENTS, key=lambda e: (e["year"], e["reported_date"
 # Fixed categorical palette, one hue per Event Type, assigned in a fixed order
 # (never cycled/reassigned by filter) and deliberately distinct from any
 # status-style red/amber/green semantics -- this dataset has no "state", just
-# five kinds of incident.
-CATEGORY_COLORS = {
+# five kinds of incident. Bolder in dark mode, original/softer in light mode --
+# rendered as CSS custom properties (like the rest of the theme) so the same
+# markup picks up the right set automatically on toggle.
+CATEGORY_COLORS_DARK = {
     "Ransomware": "#e26b2f",
     "Data Breach": "#4a8fcc",
     "Worm/Malware": "#9757d1",
     "DDoS": "#28ab9d",
     "Other": "#7d838d",
 }
+CATEGORY_COLORS_LIGHT = {
+    "Ransomware": "#d97a4a",
+    "Data Breach": "#6f9bc7",
+    "Worm/Malware": "#a67fc9",
+    "DDoS": "#4fb3a9",
+    "Other": "#8a8f98",
+}
+CATEGORY_CSS_VAR = {
+    "Ransomware": "--cat-ransomware",
+    "Data Breach": "--cat-databreach",
+    "Worm/Malware": "--cat-worm",
+    "DDoS": "--cat-ddos",
+    "Other": "--cat-other",
+}
 CATEGORY_ORDER = ["Ransomware", "Data Breach", "Worm/Malware", "DDoS", "Other"]
+
+
+def cat_var(cat):
+    return f"var({CATEGORY_CSS_VAR[cat]})"
+
+
+def cat_soft_var(cat):
+    return f"color-mix(in srgb, {cat_var(cat)} 15%, transparent)"
 
 # ---------------- The CMC Scale ----------------
 # Recreates the Cyber Monitoring Centre's Category 0-5 severity matrix
@@ -39,7 +63,7 @@ CMC_SCALE_GRID = [
     [2, 2, 3, 4, 4],         # row 3: £1bn-£5bn
     [3, 3, 4, 4, 5],         # row 4: >£5bn
 ]
-CMC_CAT_COLORS = {
+CMC_CAT_COLORS_DARK = {
     0: ("#7d7d76", "#f2ece1"),
     1: ("#edd4bc", "#2e2013"),
     2: ("#e3b389", "#2e2013"),
@@ -47,6 +71,33 @@ CMC_CAT_COLORS = {
     4: ("#c96530", "#fbf3ea"),
     5: ("#9c3814", "#fbf3ea"),
 }
+CMC_CAT_COLORS_LIGHT = {
+    0: ("#9c9c96", "#241c15"),
+    1: ("#f3e6da", "#3a2f26"),
+    2: ("#eccab0", "#3a2f26"),
+    3: ("#e2a06e", "#2e2013"),
+    4: ("#d97a4a", "#1b120c"),
+    5: ("#b8461f", "#f8f0e8"),
+}
+
+
+def _cat_css_vars(colors):
+    return "\n".join(f"  {CATEGORY_CSS_VAR[cat]}: {colors[cat]};" for cat in CATEGORY_ORDER)
+
+
+def _cmc_css_vars(colors):
+    lines = []
+    for i in range(6):
+        bg, fg = colors[i]
+        lines.append(f"  --cmc-cat-{i}: {bg};")
+        lines.append(f"  --cmc-cat-{i}-text: {fg};")
+    return "\n".join(lines)
+
+
+CAT_VARS_DARK = _cat_css_vars(CATEGORY_COLORS_DARK)
+CAT_VARS_LIGHT = _cat_css_vars(CATEGORY_COLORS_LIGHT)
+CMC_VARS_DARK = _cmc_css_vars(CMC_CAT_COLORS_DARK)
+CMC_VARS_LIGHT = _cmc_css_vars(CMC_CAT_COLORS_LIGHT)
 
 # Per CMC's actual published definitions: "Affected Population" is the
 # number of ORGANISATIONS (public bodies + registered companies) that
@@ -155,8 +206,7 @@ def money(v, force_sign=False):
 def cmc_badge_html(cat):
     if cat is None:
         return '<span class="cmc-badge cmc-badge-none">&mdash;</span>'
-    bg, fg = CMC_CAT_COLORS[cat]
-    return f'<span class="cmc-badge" style="background:{bg};color:{fg}">Cat {cat}</span>'
+    return f'<span class="cmc-badge" style="background:var(--cmc-cat-{cat});color:var(--cmc-cat-{cat}-text)">Cat {cat}</span>'
 
 
 # ---------------- KPIs ----------------
@@ -311,12 +361,12 @@ CRIMINAL_PLAYBOOK = [
 
 # ---------------- Overview: mosaic (one cell per event, colored by category) ----------------
 mosaic_cells = "".join(
-    f'<div class="cell" style="background:{CATEGORY_COLORS[e["category"]]}" '
+    f'<div class="cell" style="background:{cat_var(e["category"])}" '
     f'title="{esc(e["event_name"])} ({e["year"]}) &mdash; {esc(e["category"])}"></div>'
     for e in EVENTS_BY_YEAR_DESC
 )
 mosaic_legend = "".join(
-    f'<span><span class="legend-dot" style="background:{CATEGORY_COLORS[cat]}"></span>{cat} {category_counts.get(cat, 0)}</span>'
+    f'<span><span class="legend-dot" style="background:{cat_var(cat)}"></span>{cat} {category_counts.get(cat, 0)}</span>'
     for cat in CATEGORY_ORDER
 )
 
@@ -324,7 +374,7 @@ mosaic_legend = "".join(
 notable = sorted(with_impact, key=lambda e: -e["total_financial_impact"])[:8]
 notable_items = "".join(f'''
 <li class="pq-item">
-  <span class="pq-dot" style="background:{CATEGORY_COLORS[e["category"]]}"></span>
+  <span class="pq-dot" style="background:{cat_var(e["category"])}"></span>
   <div class="pq-body">
     <div class="pq-name">{esc(e["event_name"])}</div>
     <div class="pq-meta">{e["year"]} &middot; {esc(e["sector"] or "Unclassified")}</div>
@@ -362,7 +412,7 @@ for i, y in enumerate(years):
         seg_h = usable_h * (c / total_c)
         y_top = y_cursor - seg_h
         tip = f"{y} &middot; {cat}: {c}"
-        timeline_svg += f'<rect x="{x:.1f}" y="{y_top:.1f}" width="{bar_w:.1f}" height="{seg_h:.1f}" rx="1.5" fill="{CATEGORY_COLORS[cat]}"><title>{tip}</title></rect>'
+        timeline_svg += f'<rect x="{x:.1f}" y="{y_top:.1f}" width="{bar_w:.1f}" height="{seg_h:.1f}" rx="1.5" style="fill:{cat_var(cat)}"><title>{tip}</title></rect>'
         y_cursor = y_top - SEG_GAP
 
 # year-axis ticks every 5 years, always including the first and last year
@@ -378,7 +428,7 @@ recent_rows = "".join(f'''
 <tr>
   <td class="mono muted">{e["year"]}</td>
   <td>{esc(e["event_name"])}</td>
-  <td><span class="cat-chip" style="color:{CATEGORY_COLORS[e["category"]]};background:{CATEGORY_COLORS[e["category"]]}22">{esc(e["category"])}</span></td>
+  <td><span class="cat-chip" style="color:{cat_var(e["category"])};background:{cat_soft_var(e["category"])}">{esc(e["category"])}</span></td>
   <td class="muted">{esc(e["sector"] or "Unclassified")}</td>
   <td class="mono num">{money(e["total_financial_impact"])}</td>
 </tr>''' for e in EVENTS_BY_YEAR_DESC[:14])
@@ -387,7 +437,7 @@ recent_rows = "".join(f'''
 incident_rows = "".join(f'''
 <li class="alert-row {'is-selected' if i == 0 else ''}" data-idx="{i}" data-search="{esc((e["event_name"] + " " + (e["sector"] or "") + " " + e["category"] + " " + str(e["year"])).lower())}">
   <input type="checkbox" class="compare-check" data-idx="{i}" title="Add to comparison">
-  <span class="cat-chip" style="color:{CATEGORY_COLORS[e["category"]]};background:{CATEGORY_COLORS[e["category"]]}22">{esc(e["category"])}</span>
+  <span class="cat-chip" style="color:{cat_var(e["category"])};background:{cat_soft_var(e["category"])}">{esc(e["category"])}</span>
   <div class="alert-row-body">
     <div class="alert-row-name">{esc(e["event_name"])}</div>
     <div class="alert-row-reason">{e["year"]} &middot; {esc(e["sector"] or "Unclassified")}</div>
@@ -431,7 +481,7 @@ sector_rows = "".join(f'''
 </li>''' for sector, count in top_sectors)
 
 sector_grid_cells = "".join(
-    f'<div class="cell" style="background:{CATEGORY_COLORS[e["category"]]}" '
+    f'<div class="cell" style="background:{cat_var(e["category"])}" '
     f'title="{esc(e["event_name"])} &mdash; {esc(e["sector"] or "Unclassified")}"></div>'
     for e in EVENTS_BY_YEAR_DESC
 )
@@ -472,7 +522,7 @@ report_rows = "".join(f'''
 <tr class="asset-row" data-name="{esc(e["event_name"].lower())}" data-country="{esc((e["primary_country"] or "unknown").lower())}" data-sector="{esc((e["sector"] or "unclassified").lower())}">
   <td class="mono">{e["year"]}</td>
   <td>{esc(e["event_name"])}</td>
-  <td><span class="cat-chip" style="color:{CATEGORY_COLORS[e["category"]]};background:{CATEGORY_COLORS[e["category"]]}22">{esc(e["category"])}</span></td>
+  <td><span class="cat-chip" style="color:{cat_var(e["category"])};background:{cat_soft_var(e["category"])}">{esc(e["category"])}</span></td>
   <td class="muted">{esc(e["sector"] or "Unclassified")}</td>
   <td class="muted">{esc(e["primary_country"] or "&mdash;")}</td>
   <td>{'Yes' if e["nation_state"] else 'No'}</td>
@@ -484,7 +534,7 @@ report_rows = "".join(f'''
 playbook_cards = "".join(f'''
 <div class="card playbook-card">
   <div class="playbook-head">
-    <span class="legend-dot" style="background:{CATEGORY_COLORS[cat]}"></span>
+    <span class="legend-dot" style="background:{cat_var(cat)}"></span>
     <div class="section-title" style="margin:0;">{esc(cat)}</div>
   </div>
   <div class="playbook-stats">{category_counts.get(cat, 0)} incidents &middot; {money(category_impact[cat]) if category_impact[cat] else "no disclosed impact"}</div>
@@ -520,11 +570,10 @@ for row in [4, 3, 2, 1, 0]:
         if cat is None:
             cmc_grid_cells += '<div class="cmc-cell cmc-cell-blank"></div>'
         else:
-            bg, fg = CMC_CAT_COLORS[cat]
             names = cmc_cell_incidents[(row, col)]
             tip = "&#10;".join(esc(n) for n in names) if names else "No tracked incidents in this range"
             cmc_grid_cells += (
-                f'<div class="cmc-cell" style="background:{bg};color:{fg}" '
+                f'<div class="cmc-cell" style="background:var(--cmc-cat-{cat});color:var(--cmc-cat-{cat}-text)" '
                 f'data-tip="{tip}">Cat {cat}<span class="cmc-cell-count">{len(names) or ""}</span></div>'
             )
 cmc_grid_cells += '<div></div>' + "".join(f'<div class="cmc-col-label">{esc(lbl)}</div>' for lbl in CMC_COL_LABELS)
@@ -553,6 +602,8 @@ PAGE = f"""<!DOCTYPE html>
   --topnav-bg: rgba(24,34,32,0.85);
   --hover-tint: rgba(242,236,225,0.06);
   --hairline: rgba(242,236,225,0.15);
+{CAT_VARS_DARK}
+{CMC_VARS_DARK}
   --font-display: Georgia, "Iowan Old Style", "Source Serif 4", ui-serif, serif;
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -573,6 +624,8 @@ PAGE = f"""<!DOCTYPE html>
   --topnav-bg: rgba(245,240,232,0.88);
   --hover-tint: rgba(33,26,20,0.05);
   --hairline: rgba(33,26,20,0.14);
+{CAT_VARS_LIGHT}
+{CMC_VARS_LIGHT}
   color-scheme: light;
 }}
 * {{ box-sizing: border-box; }}
@@ -922,6 +975,22 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
 
   <section class="tab-panel" id="tab-insights">
     <div class="card" style="margin-bottom: 14px;">
+      <div class="section-title">The CMC Scale</div>
+      <div class="cmc-scale-layout">
+        <div class="cmc-axis-label cmc-axis-y">Financial impact</div>
+        <div class="cmc-scale-grid">{cmc_grid_cells}</div>
+      </div>
+      <div class="cmc-axis-label cmc-axis-x">Affected population (UK organisations)</div>
+      <div class="kpi-foot" style="margin-top:14px;">
+        {cmc_classified_count} of {total_events} incidents could be classified against this scale. Hover a cell to see which.
+        Per CMC's actual methodology, <strong>Affected Population</strong> is the number of UK organisations financially impacted (not individuals),
+        and <strong>Financial Impact</strong> excludes fines/regulatory costs and caps any single organisation's contribution at £1bn.
+        Most incidents in this dataset only report an individual/consumer count, not an organisation count, so they're deliberately left unclassified here
+        rather than scored against the wrong unit &mdash; this is a strict, conservative reading, not a full implementation of CMC's methodology.
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 14px;">
       <div class="section-title">Key risk signal</div>
       <div class="insight-headline">{headline_text}</div>
     </div>
@@ -940,22 +1009,6 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
           <div class="compare-group-title">Criminal / unattributed</div>
           <ul class="playbook-list">{criminal_playbook_html}</ul>
         </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top: 14px;">
-      <div class="section-title">The CMC Scale</div>
-      <div class="cmc-scale-layout">
-        <div class="cmc-axis-label cmc-axis-y">Financial impact</div>
-        <div class="cmc-scale-grid">{cmc_grid_cells}</div>
-      </div>
-      <div class="cmc-axis-label cmc-axis-x">Affected population (UK organisations)</div>
-      <div class="kpi-foot" style="margin-top:14px;">
-        {cmc_classified_count} of {total_events} incidents could be classified against this scale. Hover a cell to see which.
-        Per CMC's actual methodology, <strong>Affected Population</strong> is the number of UK organisations financially impacted (not individuals),
-        and <strong>Financial Impact</strong> excludes fines/regulatory costs and caps any single organisation's contribution at £1bn.
-        Most incidents in this dataset only report an individual/consumer count, not an organisation count, so they're deliberately left unclassified here
-        rather than scored against the wrong unit &mdash; this is a strict, conservative reading, not a full implementation of CMC's methodology.
       </div>
     </div>
 
@@ -1083,7 +1136,7 @@ function renderIncidentDetail(idx) {{
         <div class="detail-meta">${{e.year}} &middot; ${{e.sector}} &middot; ${{e.country || 'Unknown'}}</div>
       </div>
       <div style="display:flex; gap:6px; flex:none;">
-        <span class="cat-chip" style="color:${{CATEGORY_COLORS[e.category]}};background:${{CATEGORY_COLORS[e.category]}}22">${{e.category}}</span>
+        <span class="cat-chip" style="color:${{catVar(e.category)}};background:${{catSoftVar(e.category)}}">${{e.category}}</span>
         ${{cmcBadgeHtml(e.cmc_category)}}
       </div>
     </div>
@@ -1113,13 +1166,13 @@ function renderIncidentDetail(idx) {{
   `;
 }}
 
-const CATEGORY_COLORS = {json.dumps(CATEGORY_COLORS)};
-const CMC_CAT_COLORS = {json.dumps(CMC_CAT_COLORS)};
+const CATEGORY_CSS_VAR = {json.dumps(CATEGORY_CSS_VAR)};
+function catVar(cat) {{ return `var(${{CATEGORY_CSS_VAR[cat]}})`; }}
+function catSoftVar(cat) {{ return `color-mix(in srgb, var(${{CATEGORY_CSS_VAR[cat]}}) 15%, transparent)`; }}
 
 function cmcBadgeHtml(cat) {{
   if (cat == null) return '<span class="cmc-badge cmc-badge-none">Not classified</span>';
-  const [bg, fg] = CMC_CAT_COLORS[cat];
-  return `<span class="cmc-badge" style="background:${{bg}};color:${{fg}}">Cat ${{cat}}</span>`;
+  return `<span class="cmc-badge" style="background:var(--cmc-cat-${{cat}});color:var(--cmc-cat-${{cat}}-text)">Cat ${{cat}}</span>`;
 }}
 
 document.querySelectorAll('.alert-row').forEach(row => {{
@@ -1186,7 +1239,7 @@ function renderCompareView() {{
 
   const rows = [
     ['Year', e => e.year],
-    ['Type', e => `<span class="cat-chip" style="color:${{CATEGORY_COLORS[e.category]}};background:${{CATEGORY_COLORS[e.category]}}22">${{e.category}}</span>`],
+    ['Type', e => `<span class="cat-chip" style="color:${{catVar(e.category)}};background:${{catSoftVar(e.category)}}">${{e.category}}</span>`],
     ['Sector', e => e.sector],
     ['Country', e => e.country || '&mdash;'],
     ['Nation-state', e => e.nation_state ? 'Yes' : 'No'],
