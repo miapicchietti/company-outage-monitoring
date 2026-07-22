@@ -40,35 +40,42 @@ CMC_SCALE_GRID = [
     [3, 3, 4, 4, 5],         # row 4: >£5bn
 ]
 CMC_CAT_COLORS = {
-    0: ("#4a5450", "#f2ece1"),
-    1: ("#7a5a45", "#f2ece1"),
-    2: ("#a06a3f", "#f2ece1"),
-    3: ("#c2753f", "#f2ece1"),
+    0: ("#9c9c96", "#241c15"),
+    1: ("#f3e6da", "#3a2f26"),
+    2: ("#eccab0", "#3a2f26"),
+    3: ("#e2a06e", "#2e2013"),
     4: ("#d97a4a", "#1b120c"),
-    5: ("#9c3f22", "#f2ece1"),
+    5: ("#b8461f", "#f8f0e8"),
 }
 
-_POP_KEYWORDS = re.compile(
-    r"(customers?|individuals?|accounts?|records?|users?|members?|people|residents?|"
-    r"devices?|hosts?|servers?|employees?|patients?|voters?|students?|subscribers?|"
-    r"victims?|organi[sz]ations?|orgs?|businesses?|companies|institutions?|guests?|"
-    r"downloads?|drivers?|passengers?|clients?)"
+# Per CMC's actual published definitions: "Affected Population" is the
+# number of ORGANISATIONS (public bodies + registered companies) that
+# suffered a financial impact -- explicitly not a count of individual
+# people/consumers/records/devices. "Financial Impact" excludes fines,
+# regulatory costs, and impacts to individuals, and caps any single
+# organisation's contribution at £1bn. Our source CSV wasn't built to this
+# schema (its "impacted entities" field is usually a people/record count,
+# not an org count), so applying the real definition means most incidents
+# simply don't have a usable organisation-count figure -- and are left
+# unclassified rather than guessed from a mismatched number.
+_ORG_KEYWORDS = re.compile(
+    r"(organi[sz]ations?|orgs?|businesses?|companies|institutions?|agenc(?:y|ies)|"
+    r"trusts?|providers?|vendors?|suppliers?|entit(?:y|ies)|firms?|hospitals?|branches?)"
 )
 _NUM_RE = re.compile(r"([\d][\d,]*\.?\d*)\s*(million|billion|thousand|k\b|m\b|bn\b)?(%?)", re.I)
 
 
-def _parse_population(raw):
-    """Best-effort: pull the largest number followed by a population-ish
-    word ('customers', 'individuals', 'organizations', ...) out of the free-
-    text 'Number of Impacted entities/systems' field. Falls back to the
-    largest number in the string if no such word is nearby. Inherently
-    approximate -- this field mixes people-counts, org-counts, and device-
-    counts with no fixed schema."""
+def _parse_org_population(raw):
+    """Best-effort: pull the largest number followed by an organisation-type
+    word ('organizations', 'companies', 'trusts', ...) out of the free-text
+    'Number of Impacted entities/systems' field. Deliberately does NOT fall
+    back to just the largest number in the string -- under CMC's real
+    definition a customer/individual count is the wrong unit entirely, so
+    "no organisation-count mentioned" must resolve to None, not a guess."""
     if not raw:
         return None
     low = raw.lower()
-    keyword_candidates = []
-    all_candidates = []
+    candidates = []
     for m in _NUM_RE.finditer(low):
         num_str, suffix, pct = m.groups()
         if pct == "%":
@@ -87,12 +94,21 @@ def _parse_population(raw):
                 num *= 1_000
         if num < 1:
             continue
-        all_candidates.append(num)
-        if _POP_KEYWORDS.search(low[m.end():m.end() + 25]):
-            keyword_candidates.append(num)
-    if keyword_candidates:
-        return max(keyword_candidates)
-    return max(all_candidates) if all_candidates else None
+        if _ORG_KEYWORDS.search(low[m.end():m.end() + 25]):
+            candidates.append(num)
+    return max(candidates) if candidates else None
+
+
+def _cmc_financial_impact_m(entry):
+    """CMC's Financial Impact excludes fines/regulatory costs and caps any
+    single organisation's contribution at £1bn. Our data isn't broken down
+    finely enough to strip out every excluded cost type, but fines/legal IS
+    its own column, so subtract that much at least, then apply the cap."""
+    total = entry["total_financial_impact"]
+    if total is None:
+        return None
+    fines = entry["fines_legal"] or 0
+    return min(max(total - fines, 0), 1000)
 
 
 def _band_index(value, bounds):
@@ -119,8 +135,9 @@ def cmc_category(financial_impact_m, population):
 
 
 for _e in EVENTS:
-    _e["cmc_population"] = _parse_population(_e["number_impacted"])
-    _e["cmc_category"] = cmc_category(_e["total_financial_impact"], _e["cmc_population"])
+    _e["cmc_population"] = _parse_org_population(_e["number_impacted"])
+    _e["cmc_financial_impact"] = _cmc_financial_impact_m(_e)
+    _e["cmc_category"] = cmc_category(_e["cmc_financial_impact"], _e["cmc_population"])
 
 
 def esc(s):
@@ -482,6 +499,19 @@ criminal_playbook_html = "".join(f"<li>{esc(item)}</li>" for item in CRIMINAL_PL
 CMC_ROW_LABELS = ["<£10m", "£10m–£100m", "£100m–£1bn", "£1bn–£5bn", ">£5bn"]
 CMC_COL_LABELS = ["<270", "270–2.7k", "2.7k–27k", "27k–136k", ">136k"]
 
+# Which tracked incidents actually land in each (row, col) cell, for the
+# hover tooltip -- computed from the same banding logic as cmc_category, not
+# just grouped by the final category number, so the tooltip reflects the
+# exact cell being hovered rather than every incident that happens to share
+# its category.
+cmc_cell_incidents = {(r, c): [] for r in range(5) for c in range(5)}
+for _e in EVENTS:
+    if _e["cmc_financial_impact"] is None or _e["cmc_population"] is None:
+        continue
+    _row = _band_index(_e["cmc_financial_impact"], CMC_FIN_BANDS)
+    _col = _band_index(_e["cmc_population"], CMC_POP_BANDS)
+    cmc_cell_incidents[(_row, _col)].append(f'{_e["event_name"]} ({_e["year"]})')
+
 cmc_grid_cells = ""
 for row in [4, 3, 2, 1, 0]:
     cmc_grid_cells += f'<div class="cmc-row-label">{esc(CMC_ROW_LABELS[row])}</div>'
@@ -491,7 +521,12 @@ for row in [4, 3, 2, 1, 0]:
             cmc_grid_cells += '<div class="cmc-cell cmc-cell-blank"></div>'
         else:
             bg, fg = CMC_CAT_COLORS[cat]
-            cmc_grid_cells += f'<div class="cmc-cell" style="background:{bg};color:{fg}">Cat {cat}</div>'
+            names = cmc_cell_incidents[(row, col)]
+            tip = "&#10;".join(esc(n) for n in names) if names else "No tracked incidents in this range"
+            cmc_grid_cells += (
+                f'<div class="cmc-cell" style="background:{bg};color:{fg}" '
+                f'data-tip="{tip}">Cat {cat}<span class="cmc-cell-count">{len(names) or ""}</span></div>'
+            )
 cmc_grid_cells += '<div></div>' + "".join(f'<div class="cmc-col-label">{esc(lbl)}</div>' for lbl in CMC_COL_LABELS)
 
 cmc_classified_count = sum(1 for e in EVENTS if e["cmc_category"] is not None)
@@ -595,8 +630,24 @@ h1, h2, h3 {{ font-family: var(--font-display); font-weight: 600; margin: 0; tex
 .cmc-axis-x {{ text-align: center; margin-top: 6px; }}
 .cmc-scale-grid {{ flex: 1; display: grid; grid-template-columns: 110px repeat(5, 1fr); gap: 4px; max-width: 640px; }}
 .cmc-row-label {{ display: flex; align-items: center; font-size: 11px; color: var(--text-faint); white-space: nowrap; }}
-.cmc-cell {{ aspect-ratio: 1.4; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; border-radius: 6px; }}
+.cmc-cell {{
+  aspect-ratio: 1.4; display: flex; align-items: center; justify-content: center; gap: 5px;
+  font-size: 12px; font-weight: 700; border-radius: 6px; position: relative; cursor: default;
+  transition: transform 0.1s, box-shadow 0.1s;
+}}
+.cmc-cell:hover {{ transform: scale(1.04); box-shadow: 0 4px 14px rgba(0,0,0,0.3); z-index: 5; }}
+.cmc-cell-count {{ font-size: 10px; font-weight: 700; opacity: 0.75; }}
 .cmc-cell-blank {{ background: transparent; }}
+.cmc-cell[data-tip]:hover::after {{
+  content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  background: #0e1513; border: 1px solid var(--border-strong); color: #f2ece1; font-size: 11px; font-weight: 500;
+  padding: 8px 10px; border-radius: 8px; white-space: pre-line; text-align: left; line-height: 1.5;
+  min-width: 180px; max-width: 260px; box-shadow: 0 8px 22px rgba(0,0,0,0.4); pointer-events: none; z-index: 10;
+}}
+.cmc-cell[data-tip]:hover::before {{
+  content: ""; position: absolute; bottom: calc(100% + 3px); left: 50%; transform: translateX(-50%);
+  border: 5px solid transparent; border-top-color: #0e1513; z-index: 10;
+}}
 .cmc-col-label {{ text-align: center; font-size: 10px; color: var(--text-faint); padding-top: 4px; }}
 .mosaic {{ display: flex; flex-wrap: wrap; gap: 3px; max-height: 168px; overflow: hidden; align-content: flex-start; }}
 .cell {{ width: 9px; height: 9px; border-radius: 2px; }}
@@ -898,10 +949,13 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
         <div class="cmc-axis-label cmc-axis-y">Financial impact</div>
         <div class="cmc-scale-grid">{cmc_grid_cells}</div>
       </div>
-      <div class="cmc-axis-label cmc-axis-x">Affected population</div>
+      <div class="cmc-axis-label cmc-axis-x">Affected population (UK organisations)</div>
       <div class="kpi-foot" style="margin-top:14px;">
-        {cmc_classified_count} of {total_events} incidents could be classified against this scale &mdash; the rest lack a disclosed financial figure, a parseable affected-population figure, or both.
-        Population is a best-effort estimate pulled from each incident's free-text impact description, so treat exact category boundaries as approximate.
+        {cmc_classified_count} of {total_events} incidents could be classified against this scale. Hover a cell to see which.
+        Per CMC's actual methodology, <strong>Affected Population</strong> is the number of UK organisations financially impacted (not individuals),
+        and <strong>Financial Impact</strong> excludes fines/regulatory costs and caps any single organisation's contribution at £1bn.
+        Most incidents in this dataset only report an individual/consumer count, not an organisation count, so they're deliberately left unclassified here
+        rather than scored against the wrong unit &mdash; this is a strict, conservative reading, not a full implementation of CMC's methodology.
       </div>
     </div>
 
