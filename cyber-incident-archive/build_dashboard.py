@@ -15,11 +15,11 @@ EVENTS_BY_YEAR_DESC = sorted(EVENTS, key=lambda e: (e["year"], e["reported_date"
 # status-style red/amber/green semantics -- this dataset has no "state", just
 # five kinds of incident.
 CATEGORY_COLORS = {
-    "Ransomware": "#d97a4a",
-    "Data Breach": "#6f9bc7",
-    "Worm/Malware": "#a67fc9",
-    "DDoS": "#4fb3a9",
-    "Other": "#8a8f98",
+    "Ransomware": "#e26b2f",
+    "Data Breach": "#4a8fcc",
+    "Worm/Malware": "#9757d1",
+    "DDoS": "#28ab9d",
+    "Other": "#7d838d",
 }
 CATEGORY_ORDER = ["Ransomware", "Data Breach", "Worm/Malware", "DDoS", "Other"]
 
@@ -40,12 +40,12 @@ CMC_SCALE_GRID = [
     [3, 3, 4, 4, 5],         # row 4: >£5bn
 ]
 CMC_CAT_COLORS = {
-    0: ("#9c9c96", "#241c15"),
-    1: ("#f3e6da", "#3a2f26"),
-    2: ("#eccab0", "#3a2f26"),
-    3: ("#e2a06e", "#2e2013"),
-    4: ("#d97a4a", "#1b120c"),
-    5: ("#b8461f", "#f8f0e8"),
+    0: ("#7d7d76", "#f2ece1"),
+    1: ("#edd4bc", "#2e2013"),
+    2: ("#e3b389", "#2e2013"),
+    3: ("#d98a4a", "#fbf3ea"),
+    4: ("#c96530", "#fbf3ea"),
+    5: ("#9c3814", "#fbf3ea"),
 }
 
 # Per CMC's actual published definitions: "Affected Population" is the
@@ -539,15 +539,15 @@ PAGE = f"""<!DOCTYPE html>
 <title>Cyber Incident Archive</title>
 <style>
 :root, :root[data-theme="dark"] {{
-  --bg: #1c2826;
-  --bg-grad: radial-gradient(1200px 600px at 12% -8%, #283834 0%, transparent 60%), #1c2826;
-  --panel: #263531;
-  --panel-raised: #2d3d39;
-  --border: rgba(242,236,225,0.12);
-  --border-strong: rgba(242,236,225,0.22);
+  --bg: #182220;
+  --bg-grad: radial-gradient(1200px 600px at 12% -8%, #22322e 0%, transparent 60%), #182220;
+  --panel: #202b28;
+  --panel-raised: #26332f;
+  --border: rgba(242,236,225,0.09);
+  --border-strong: rgba(242,236,225,0.16);
   --text: #f2ece1;
-  --text-muted: rgba(242,236,225,0.66);
-  --text-faint: rgba(242,236,225,0.44);
+  --text-muted: rgba(242,236,225,0.56);
+  --text-faint: rgba(242,236,225,0.34);
   --accent: #d97a4a;
   --accent-soft: rgba(217,122,74,0.16);
   --topnav-bg: rgba(24,34,32,0.85);
