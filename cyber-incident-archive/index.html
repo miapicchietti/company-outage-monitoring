@@ -26,11 +26,17 @@
   --cat-ddos: #28ab9d;
   --cat-other: #7d838d;
   --cmc-cat-0: #7d7d76;
+  --cmc-cat-0-text: #f2ece1;
   --cmc-cat-1: #edd4bc;
+  --cmc-cat-1-text: #2e2013;
   --cmc-cat-2: #e3b389;
+  --cmc-cat-2-text: #2e2013;
   --cmc-cat-3: #d98a4a;
+  --cmc-cat-3-text: #fbf3ea;
   --cmc-cat-4: #c96530;
+  --cmc-cat-4-text: #fbf3ea;
   --cmc-cat-5: #9c3814;
+  --cmc-cat-5-text: #fbf3ea;
   --font-display: Georgia, "Iowan Old Style", "Source Serif 4", ui-serif, serif;
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -57,11 +63,17 @@
   --cat-ddos: #4fb3a9;
   --cat-other: #8a8f98;
   --cmc-cat-0: #9c9c96;
+  --cmc-cat-0-text: #241c15;
   --cmc-cat-1: #f3e6da;
+  --cmc-cat-1-text: #3a2f26;
   --cmc-cat-2: #eccab0;
+  --cmc-cat-2-text: #3a2f26;
   --cmc-cat-3: #e2a06e;
+  --cmc-cat-3-text: #2e2013;
   --cmc-cat-4: #d97a4a;
+  --cmc-cat-4-text: #1b120c;
   --cmc-cat-5: #b8461f;
+  --cmc-cat-5-text: #f8f0e8;
   color-scheme: light;
 }
 * { box-sizing: border-box; }
@@ -123,7 +135,6 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; margin: 0; text
   aspect-ratio: 1.4; display: flex; align-items: center; justify-content: center; gap: 5px;
   font-size: 12px; font-weight: 700; border-radius: 6px; position: relative; cursor: default;
   transition: transform 0.1s, box-shadow 0.1s;
-  color: #fbf3ea; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5), 0 2px 5px rgba(0,0,0,0.4);
 }
 .cmc-cell:hover { transform: scale(1.04); box-shadow: 0 4px 14px rgba(0,0,0,0.3); z-index: 5; }
 .cmc-cell-count { font-size: 10px; font-weight: 700; opacity: 0.75; }
@@ -161,10 +172,7 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .cat-chip { font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 5px; white-space: nowrap; }
-.cmc-badge {
-  font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; display: inline-block;
-  color: #fbf3ea; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5), 0 2px 5px rgba(0,0,0,0.4);
-}
+.cmc-badge { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; display: inline-block; }
 .cmc-badge-none { background: transparent; color: var(--text-faint); }
 .table-scroll { max-height: 400px; overflow-y: auto; }
 .alerts-grid { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
@@ -1487,7 +1495,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
       <div class="section-title">The CMC Scale</div>
       <div class="cmc-scale-layout">
         <div class="cmc-axis-label cmc-axis-y">Financial impact</div>
-        <div class="cmc-scale-grid"><div class="cmc-row-label">&gt;£5bn</div><div class="cmc-cell" style="background:var(--cmc-cat-3)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-3)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-5)" data-tip="No tracked incidents in this range">Cat 5<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£1bn–£5bn</div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="MOVEit Transfer Exploitation  Cl0p Ransomware Campaign (2023)">Cat 2<span class="cmc-cell-count">1</span></div><div class="cmc-cell" style="background:var(--cmc-cat-3)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£100m–£1bn</div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-3)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£10m–£100m</div><div class="cmc-cell" style="background:var(--cmc-cat-1)" data-tip="NHS Synnovis Ransomware (2024)&#10;Costa Rica Ransomware Crisis (2023)">Cat 1<span class="cmc-cell-count">2</span></div><div class="cmc-cell" style="background:var(--cmc-cat-1)" data-tip="No tracked incidents in this range">Cat 1<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="Royal Mail Ransomware Attack (2023)&#10;SolarWinds Supply Chain (2020)&#10;Blackbaud (2020)">Cat 2<span class="cmc-cell-count">3</span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell cmc-cell-blank"></div><div class="cmc-row-label">&lt;£10m</div><div class="cmc-cell" style="background:var(--cmc-cat-0)" data-tip="No tracked incidents in this range">Cat 0<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-1)" data-tip="No tracked incidents in this range">Cat 1<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell cmc-cell-blank"></div><div class="cmc-cell cmc-cell-blank"></div><div></div><div class="cmc-col-label">&lt;270</div><div class="cmc-col-label">270–2.7k</div><div class="cmc-col-label">2.7k–27k</div><div class="cmc-col-label">27k–136k</div><div class="cmc-col-label">&gt;136k</div></div>
+        <div class="cmc-scale-grid"><div class="cmc-row-label">&gt;£5bn</div><div class="cmc-cell" style="background:var(--cmc-cat-3);color:var(--cmc-cat-3-text)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-3);color:var(--cmc-cat-3-text)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4);color:var(--cmc-cat-4-text)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4);color:var(--cmc-cat-4-text)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-5);color:var(--cmc-cat-5-text)" data-tip="No tracked incidents in this range">Cat 5<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£1bn–£5bn</div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="MOVEit Transfer Exploitation  Cl0p Ransomware Campaign (2023)">Cat 2<span class="cmc-cell-count">1</span></div><div class="cmc-cell" style="background:var(--cmc-cat-3);color:var(--cmc-cat-3-text)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4);color:var(--cmc-cat-4-text)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4);color:var(--cmc-cat-4-text)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£100m–£1bn</div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-3);color:var(--cmc-cat-3-text)" data-tip="No tracked incidents in this range">Cat 3<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-4);color:var(--cmc-cat-4-text)" data-tip="No tracked incidents in this range">Cat 4<span class="cmc-cell-count"></span></div><div class="cmc-row-label">£10m–£100m</div><div class="cmc-cell" style="background:var(--cmc-cat-1);color:var(--cmc-cat-1-text)" data-tip="NHS Synnovis Ransomware (2024)&#10;Costa Rica Ransomware Crisis (2023)">Cat 1<span class="cmc-cell-count">2</span></div><div class="cmc-cell" style="background:var(--cmc-cat-1);color:var(--cmc-cat-1-text)" data-tip="No tracked incidents in this range">Cat 1<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="Royal Mail Ransomware Attack (2023)&#10;SolarWinds Supply Chain (2020)&#10;Blackbaud (2020)">Cat 2<span class="cmc-cell-count">3</span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell cmc-cell-blank"></div><div class="cmc-row-label">&lt;£10m</div><div class="cmc-cell" style="background:var(--cmc-cat-0);color:var(--cmc-cat-0-text)" data-tip="No tracked incidents in this range">Cat 0<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-1);color:var(--cmc-cat-1-text)" data-tip="No tracked incidents in this range">Cat 1<span class="cmc-cell-count"></span></div><div class="cmc-cell" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)" data-tip="No tracked incidents in this range">Cat 2<span class="cmc-cell-count"></span></div><div class="cmc-cell cmc-cell-blank"></div><div class="cmc-cell cmc-cell-blank"></div><div></div><div class="cmc-col-label">&lt;270</div><div class="cmc-col-label">270–2.7k</div><div class="cmc-col-label">2.7k–27k</div><div class="cmc-col-label">27k–136k</div><div class="cmc-col-label">&gt;136k</div></div>
       </div>
       <div class="cmc-axis-label cmc-axis-x">Affected population (UK organisations)</div>
       <div class="kpi-foot" style="margin-top:14px;">
@@ -1727,7 +1735,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">UK</td>
   <td>Yes</td>
   <td class="mono num" data-sort="32.7">£32.7m</td>
-  <td class="num" data-sort="1"><span class="cmc-badge" style="background:var(--cmc-cat-1)">Cat 1</span></td>
+  <td class="num" data-sort="1"><span class="cmc-badge" style="background:var(--cmc-cat-1);color:var(--cmc-cat-1-text)">Cat 1</span></td>
 </tr>
 <tr class="asset-row" data-name="mod payroll data breach" data-country="uk" data-sector="information &amp; communication">
   <td class="mono">2024</td>
@@ -1837,7 +1845,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">US</td>
   <td>No</td>
   <td class="mono num" data-sort="7962.2">£7.96bn</td>
-  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2)">Cat 2</span></td>
+  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)">Cat 2</span></td>
 </tr>
 <tr class="asset-row" data-name="volt typhoon cyber-espionage campaign" data-country="us" data-sector="na">
   <td class="mono">2023</td>
@@ -1867,7 +1875,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">Other</td>
   <td>No</td>
   <td class="mono num" data-sort="20.1">£20.1m</td>
-  <td class="num" data-sort="1"><span class="cmc-badge" style="background:var(--cmc-cat-1)">Cat 1</span></td>
+  <td class="num" data-sort="1"><span class="cmc-badge" style="background:var(--cmc-cat-1);color:var(--cmc-cat-1-text)">Cat 1</span></td>
 </tr>
 <tr class="asset-row" data-name="dole food" data-country="global" data-sector="manufacturing">
   <td class="mono">2023</td>
@@ -1947,7 +1955,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">UK</td>
   <td>Yes</td>
   <td class="mono num" data-sort="10.0">£10.0m</td>
-  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2)">Cat 2</span></td>
+  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)">Cat 2</span></td>
 </tr>
 <tr class="asset-row" data-name="american airlines breach 2022" data-country="us" data-sector="transportation &amp; logistics">
   <td class="mono">2022</td>
@@ -2127,7 +2135,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">US</td>
   <td>No</td>
   <td class="mono num" data-sort="83.2">£83.2m</td>
-  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2)">Cat 2</span></td>
+  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)">Cat 2</span></td>
 </tr>
 <tr class="asset-row" data-name="twitter bitcoin scam hijack" data-country="global" data-sector="information &amp; communication">
   <td class="mono">2020</td>
@@ -2207,7 +2215,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
   <td class="muted">Mixed</td>
   <td>Yes</td>
   <td class="mono num" data-sort="14.0">£14.0m</td>
-  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2)">Cat 2</span></td>
+  <td class="num" data-sort="2"><span class="cmc-badge" style="background:var(--cmc-cat-2);color:var(--cmc-cat-2-text)">Cat 2</span></td>
 </tr>
 <tr class="asset-row" data-name="virgin media" data-country="uk" data-sector="manufacturing">
   <td class="mono">2020</td>
@@ -2563,7 +2571,7 @@ function catSoftVar(cat) { return `color-mix(in srgb, var(${CATEGORY_CSS_VAR[cat
 
 function cmcBadgeHtml(cat) {
   if (cat == null) return '<span class="cmc-badge cmc-badge-none">Not classified</span>';
-  return `<span class="cmc-badge" style="background:var(--cmc-cat-${cat})">Cat ${cat}</span>`;
+  return `<span class="cmc-badge" style="background:var(--cmc-cat-${cat});color:var(--cmc-cat-${cat}-text)">Cat ${cat}</span>`;
 }
 
 document.querySelectorAll('.alert-row').forEach(row => {
