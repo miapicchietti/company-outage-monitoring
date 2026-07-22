@@ -64,20 +64,20 @@ CMC_SCALE_GRID = [
     [3, 3, 4, 4, 5],         # row 4: >£5bn
 ]
 CMC_CAT_COLORS_DARK = {
-    0: "#7d7d76",
-    1: "#edd4bc",
-    2: "#e3b389",
-    3: "#d98a4a",
-    4: "#c96530",
-    5: "#9c3814",
+    0: ("#7d7d76", "#f2ece1"),
+    1: ("#edd4bc", "#2e2013"),
+    2: ("#e3b389", "#2e2013"),
+    3: ("#d98a4a", "#fbf3ea"),
+    4: ("#c96530", "#fbf3ea"),
+    5: ("#9c3814", "#fbf3ea"),
 }
 CMC_CAT_COLORS_LIGHT = {
-    0: "#9c9c96",
-    1: "#f3e6da",
-    2: "#eccab0",
-    3: "#e2a06e",
-    4: "#d97a4a",
-    5: "#b8461f",
+    0: ("#9c9c96", "#241c15"),
+    1: ("#f3e6da", "#3a2f26"),
+    2: ("#eccab0", "#3a2f26"),
+    3: ("#e2a06e", "#2e2013"),
+    4: ("#d97a4a", "#1b120c"),
+    5: ("#b8461f", "#f8f0e8"),
 }
 
 
@@ -86,7 +86,12 @@ def _cat_css_vars(colors):
 
 
 def _cmc_css_vars(colors):
-    return "\n".join(f"  --cmc-cat-{i}: {colors[i]};" for i in range(6))
+    lines = []
+    for i in range(6):
+        bg, fg = colors[i]
+        lines.append(f"  --cmc-cat-{i}: {bg};")
+        lines.append(f"  --cmc-cat-{i}-text: {fg};")
+    return "\n".join(lines)
 
 
 CAT_VARS_DARK = _cat_css_vars(CATEGORY_COLORS_DARK)
@@ -201,7 +206,7 @@ def money(v, force_sign=False):
 def cmc_badge_html(cat):
     if cat is None:
         return '<span class="cmc-badge cmc-badge-none">&mdash;</span>'
-    return f'<span class="cmc-badge" style="background:var(--cmc-cat-{cat})">Cat {cat}</span>'
+    return f'<span class="cmc-badge" style="background:var(--cmc-cat-{cat});color:var(--cmc-cat-{cat}-text)">Cat {cat}</span>'
 
 
 # ---------------- KPIs ----------------
@@ -568,7 +573,7 @@ for row in [4, 3, 2, 1, 0]:
             names = cmc_cell_incidents[(row, col)]
             tip = "&#10;".join(esc(n) for n in names) if names else "No tracked incidents in this range"
             cmc_grid_cells += (
-                f'<div class="cmc-cell" style="background:var(--cmc-cat-{cat})" '
+                f'<div class="cmc-cell" style="background:var(--cmc-cat-{cat});color:var(--cmc-cat-{cat}-text)" '
                 f'data-tip="{tip}">Cat {cat}<span class="cmc-cell-count">{len(names) or ""}</span></div>'
             )
 cmc_grid_cells += '<div></div>' + "".join(f'<div class="cmc-col-label">{esc(lbl)}</div>' for lbl in CMC_COL_LABELS)
@@ -682,7 +687,6 @@ h1, h2, h3 {{ font-family: var(--font-display); font-weight: 600; margin: 0; tex
   aspect-ratio: 1.4; display: flex; align-items: center; justify-content: center; gap: 5px;
   font-size: 12px; font-weight: 700; border-radius: 6px; position: relative; cursor: default;
   transition: transform 0.1s, box-shadow 0.1s;
-  color: #fbf3ea; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5), 0 2px 5px rgba(0,0,0,0.4);
 }}
 .cmc-cell:hover {{ transform: scale(1.04); box-shadow: 0 4px 14px rgba(0,0,0,0.3); z-index: 5; }}
 .cmc-cell-count {{ font-size: 10px; font-weight: 700; opacity: 0.75; }}
@@ -720,10 +724,7 @@ th.sortable {{ cursor: pointer; user-select: none; }}
 th.sortable:hover {{ color: var(--text); }}
 td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }}
 .cat-chip {{ font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 5px; white-space: nowrap; }}
-.cmc-badge {{
-  font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; display: inline-block;
-  color: #fbf3ea; text-shadow: -1px -1px 0 rgba(0,0,0,0.5), 1px -1px 0 rgba(0,0,0,0.5), -1px 1px 0 rgba(0,0,0,0.5), 1px 1px 0 rgba(0,0,0,0.5), 0 2px 5px rgba(0,0,0,0.4);
-}}
+.cmc-badge {{ font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; white-space: nowrap; display: inline-block; }}
 .cmc-badge-none {{ background: transparent; color: var(--text-faint); }}
 .table-scroll {{ max-height: 400px; overflow-y: auto; }}
 .alerts-grid {{ display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }}
@@ -1171,7 +1172,7 @@ function catSoftVar(cat) {{ return `color-mix(in srgb, var(${{CATEGORY_CSS_VAR[c
 
 function cmcBadgeHtml(cat) {{
   if (cat == null) return '<span class="cmc-badge cmc-badge-none">Not classified</span>';
-  return `<span class="cmc-badge" style="background:var(--cmc-cat-${{cat}})">Cat ${{cat}}</span>`;
+  return `<span class="cmc-badge" style="background:var(--cmc-cat-${{cat}});color:var(--cmc-cat-${{cat}}-text)">Cat ${{cat}}</span>`;
 }}
 
 document.querySelectorAll('.alert-row').forEach(row => {{
