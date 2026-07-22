@@ -116,6 +116,74 @@ for e in EVENTS:
 top_actors = actor_counter.most_common(10)
 unattributed_count = sum(1 for e in EVENTS if not _split_actors(e["threat_actors"]))
 
+# ---------------- Insights tab ----------------
+# "Actionable insights" here means evidence-grounded guidance derived from
+# real patterns in this incident dataset -- not a live scan of anyone's own
+# systems, so the copy is explicit that these are general best practices the
+# data supports, not personalized findings.
+_RECENT_YEARS = set(range(year_max - 4, year_max + 1))
+_recent_events = [e for e in EVENTS if e["year"] in _RECENT_YEARS]
+_recent_counts = Counter(e["category"] for e in _recent_events)
+_recent_total = len(_recent_events)
+
+_trend_deltas = []
+for cat in CATEGORY_ORDER:
+    overall_share = category_counts.get(cat, 0) / total_events
+    recent_share = (_recent_counts.get(cat, 0) / _recent_total) if _recent_total else 0
+    _trend_deltas.append((cat, overall_share, recent_share, recent_share - overall_share))
+_rising_cat, _rising_overall, _rising_recent, _rising_delta = max(_trend_deltas, key=lambda t: t[3])
+
+headline_text = (
+    f"{_rising_cat} is the fastest-rising risk in this dataset: it made up "
+    f"{_rising_overall:.0%} of all {total_events} tracked incidents, but "
+    f"{_rising_recent:.0%} of incidents in the last 5 years ({year_max-4}–{year_max}) "
+    f"— a {_rising_delta*100:+.0f}-point jump."
+)
+
+category_impact = Counter()
+for e in EVENTS:
+    category_impact[e["category"]] += e["total_financial_impact"] or 0
+
+CATEGORY_PLAYBOOKS = {
+    "Ransomware": [
+        "Maintain offline/immutable backups and test restores on a schedule — several incidents here (Colonial Pipeline, JBS) paid a ransom partly because clean backups weren't fast enough to restore from.",
+        "Enforce MFA on all remote access, VPNs, and privileged accounts.",
+        "Segment networks so one compromised host can't reach core systems.",
+        "Rehearse an incident response plan before you need it: decide in advance whether you'd ever pay, who has authority to decide, and who gets called first.",
+        "Watch third-party remote-access tools closely — Kaseya and MOVEit both show attackers reaching victims through a vendor's software, not the victim's own systems.",
+    ],
+    "Data Breach": [
+        "Audit third-party and supplier access on a schedule — MOVEit, Blue Yonder, and Target all show breaches propagating through a vendor rather than a direct attack.",
+        "Enforce least-privilege access and rotate credentials, especially for accounts with database or bulk-export access.",
+        "Encrypt sensitive data at rest and in transit, and monitor for unusual bulk data access.",
+        "Have a breach notification playbook ready — regulatory clocks (e.g. the ICO's 72-hour rule) start the moment you know, not once you've finished investigating.",
+    ],
+    "Worm/Malware": [
+        "Patch known vulnerabilities promptly — every worm in this dataset (Code Red, SQL Slammer) exploited a flaw that already had a patch available.",
+        "Disable or isolate legacy systems that can't be updated.",
+        "Keep endpoint protection and email filtering current — self-propagating malware still spreads fastest through unpatched or unmonitored machines.",
+    ],
+    "DDoS": [
+        "Put a CDN or DDoS-scrubbing service in front of anything public-facing.",
+        "Pre-negotiate an escalation path with your ISP/hosting provider before an attack, not during one.",
+    ],
+    "Other": [
+        "Insider and physical-access risk needs its own controls, separate from external-attacker defenses — several incidents in this bucket were contractor- or insider-driven.",
+        "Track third-party infrastructure dependencies (cloud providers, SaaS vendors) in your own risk register, since their outages become yours.",
+    ],
+}
+
+NS_PLAYBOOK = [
+    "Focus on long-dwell-time detection, not just perimeter defense — nation-state actors more often prioritize persistent access over immediate disruption.",
+    "Critical infrastructure and government-adjacent sectors should assume they are targeted, not just at risk.",
+    "Threat intel sharing (NCSC, sector ISACs) matters more here, since attribution and tactics shift per state actor.",
+]
+CRIMINAL_PLAYBOOK = [
+    "This bucket is majority financially motivated — ransomware readiness and backup discipline covers most of this exposure.",
+    "\"Unattributed\" doesn't mean unsophisticated — several of the costliest incidents here (M&S, MGM, Caesars) were criminal, not nation-state.",
+    "Cyber insurance and an incident-response retainer are worth evaluating given this bucket's higher average disclosed cost.",
+]
+
 # ---------------- Overview: mosaic (one cell per event, colored by category) ----------------
 mosaic_cells = "".join(
     f'<div class="cell" style="background:{CATEGORY_COLORS[e["category"]]}" '
@@ -285,6 +353,20 @@ report_rows = "".join(f'''
   <td class="mono num" data-sort="{e["total_financial_impact"] if e["total_financial_impact"] is not None else -1}">{money(e["total_financial_impact"])}</td>
 </tr>''' for e in EVENTS_BY_YEAR_DESC)
 
+# ---------------- Insights tab ----------------
+playbook_cards = "".join(f'''
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:{CATEGORY_COLORS[cat]}"></span>
+    <div class="section-title" style="margin:0;">{esc(cat)}</div>
+  </div>
+  <div class="playbook-stats">{category_counts.get(cat, 0)} incidents &middot; {money(category_impact[cat]) if category_impact[cat] else "no disclosed impact"}</div>
+  <ul class="playbook-list">{"".join(f"<li>{esc(item)}</li>" for item in items)}</ul>
+</div>''' for cat, items in CATEGORY_PLAYBOOKS.items())
+
+ns_playbook_html = "".join(f"<li>{esc(item)}</li>" for item in NS_PLAYBOOK)
+criminal_playbook_html = "".join(f"<li>{esc(item)}</li>" for item in CRIMINAL_PLAYBOOK)
+
 PAGE = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -369,6 +451,15 @@ h1, h2, h3 {{ font-family: var(--font-display); font-weight: 600; margin: 0; tex
 .compare-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }}
 .compare-group-title {{ font-family: var(--font-display); font-size: 15px; font-weight: 700; margin-bottom: 10px; }}
 .compare-group-stats {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }}
+.insight-headline {{ font-family: var(--font-display); font-size: 19px; font-weight: 700; line-height: 1.4; text-wrap: balance; }}
+.playbook-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }}
+.playbook-card {{ display: flex; flex-direction: column; }}
+.playbook-head {{ display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }}
+.playbook-head .legend-dot {{ width: 9px; height: 9px; border-radius: 3px; }}
+.playbook-stats {{ font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }}
+.playbook-list {{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }}
+.playbook-list li {{ font-size: 12.5px; color: var(--text); line-height: 1.55; padding-left: 18px; position: relative; }}
+.playbook-list li::before {{ content: ""; position: absolute; left: 0; top: 6px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }}
 .mosaic {{ display: flex; flex-wrap: wrap; gap: 3px; max-height: 168px; overflow: hidden; align-content: flex-start; }}
 .cell {{ width: 9px; height: 9px; border-radius: 2px; }}
 .mosaic-legend {{ display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 11.5px; color: var(--text-muted); }}
@@ -510,6 +601,7 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
     <button class="tab-btn is-active" data-tab="overview">Overview</button>
     <button class="tab-btn" data-tab="incidents">Incidents</button>
     <button class="tab-btn" data-tab="sectors">Sectors &amp; Actors</button>
+    <button class="tab-btn" data-tab="insights">Insights</button>
     <button class="tab-btn" data-tab="reports">Reports</button>
   </div>
   <div class="nav-right">
@@ -634,6 +726,34 @@ td {{ padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align:
         <ul class="worst-list">{actor_rows}</ul>
         <div class="kpi-foot" style="margin-top:10px;">{unattributed_count} of {total_events} incidents have no confirmed attribution</div>
       </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-insights">
+    <div class="card" style="margin-bottom: 14px;">
+      <div class="section-title">Key risk signal</div>
+      <div class="insight-headline">{headline_text}</div>
+    </div>
+
+    <div class="section-title" style="margin: 4px 0 10px;">Mitigation playbook by incident type</div>
+    <div class="playbook-grid">{playbook_cards}</div>
+
+    <div class="card" style="margin-top: 14px;">
+      <div class="section-title">Nation-state vs. criminal posture</div>
+      <div class="compare-row">
+        <div>
+          <div class="compare-group-title">Nation-state attributed</div>
+          <ul class="playbook-list">{ns_playbook_html}</ul>
+        </div>
+        <div>
+          <div class="compare-group-title">Criminal / unattributed</div>
+          <ul class="playbook-list">{criminal_playbook_html}</ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-foot" style="margin-top:14px;">
+      These are general best-practice recommendations grounded in patterns across the {total_events} tracked incidents &mdash; not a live assessment of any specific organization's systems.
     </div>
   </section>
 

@@ -82,6 +82,15 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; margin: 0; text
 .compare-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .compare-group-title { font-family: var(--font-display); font-size: 15px; font-weight: 700; margin-bottom: 10px; }
 .compare-group-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.insight-headline { font-family: var(--font-display); font-size: 19px; font-weight: 700; line-height: 1.4; text-wrap: balance; }
+.playbook-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.playbook-card { display: flex; flex-direction: column; }
+.playbook-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.playbook-head .legend-dot { width: 9px; height: 9px; border-radius: 3px; }
+.playbook-stats { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.playbook-list li { font-size: 12.5px; color: var(--text); line-height: 1.55; padding-left: 18px; position: relative; }
+.playbook-list li::before { content: ""; position: absolute; left: 0; top: 6px; width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }
 .mosaic { display: flex; flex-wrap: wrap; gap: 3px; max-height: 168px; overflow: hidden; align-content: flex-start; }
 .cell { width: 9px; height: 9px; border-radius: 2px; }
 .mosaic-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 11.5px; color: var(--text-muted); }
@@ -223,6 +232,7 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
     <button class="tab-btn is-active" data-tab="overview">Overview</button>
     <button class="tab-btn" data-tab="incidents">Incidents</button>
     <button class="tab-btn" data-tab="sectors">Sectors &amp; Actors</button>
+    <button class="tab-btn" data-tab="insights">Insights</button>
     <button class="tab-btn" data-tab="reports">Reports</button>
   </div>
   <div class="nav-right">
@@ -1416,6 +1426,74 @@ td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: 
 </li></ul>
         <div class="kpi-foot" style="margin-top:10px;">31 of 83 incidents have no confirmed attribution</div>
       </div>
+    </div>
+  </section>
+
+  <section class="tab-panel" id="tab-insights">
+    <div class="card" style="margin-bottom: 14px;">
+      <div class="section-title">Key risk signal</div>
+      <div class="insight-headline">Ransomware is the fastest-rising risk in this dataset: it made up 37% of all 83 tracked incidents, but 48% of incidents in the last 5 years (2021–2025) — a +11-point jump.</div>
+    </div>
+
+    <div class="section-title" style="margin: 4px 0 10px;">Mitigation playbook by incident type</div>
+    <div class="playbook-grid">
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:#d97a4a"></span>
+    <div class="section-title" style="margin:0;">Ransomware</div>
+  </div>
+  <div class="playbook-stats">31 incidents &middot; £1.39bn</div>
+  <ul class="playbook-list"><li>Maintain offline/immutable backups and test restores on a schedule — several incidents here (Colonial Pipeline, JBS) paid a ransom partly because clean backups weren&#x27;t fast enough to restore from.</li><li>Enforce MFA on all remote access, VPNs, and privileged accounts.</li><li>Segment networks so one compromised host can&#x27;t reach core systems.</li><li>Rehearse an incident response plan before you need it: decide in advance whether you&#x27;d ever pay, who has authority to decide, and who gets called first.</li><li>Watch third-party remote-access tools closely — Kaseya and MOVEit both show attackers reaching victims through a vendor&#x27;s software, not the victim&#x27;s own systems.</li></ul>
+</div>
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:#6f9bc7"></span>
+    <div class="section-title" style="margin:0;">Data Breach</div>
+  </div>
+  <div class="playbook-stats">33 incidents &middot; £10.48bn</div>
+  <ul class="playbook-list"><li>Audit third-party and supplier access on a schedule — MOVEit, Blue Yonder, and Target all show breaches propagating through a vendor rather than a direct attack.</li><li>Enforce least-privilege access and rotate credentials, especially for accounts with database or bulk-export access.</li><li>Encrypt sensitive data at rest and in transit, and monitor for unusual bulk data access.</li><li>Have a breach notification playbook ready — regulatory clocks (e.g. the ICO&#x27;s 72-hour rule) start the moment you know, not once you&#x27;ve finished investigating.</li></ul>
+</div>
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:#a67fc9"></span>
+    <div class="section-title" style="margin:0;">Worm/Malware</div>
+  </div>
+  <div class="playbook-stats">4 incidents &middot; £16.09bn</div>
+  <ul class="playbook-list"><li>Patch known vulnerabilities promptly — every worm in this dataset (Code Red, SQL Slammer) exploited a flaw that already had a patch available.</li><li>Disable or isolate legacy systems that can&#x27;t be updated.</li><li>Keep endpoint protection and email filtering current — self-propagating malware still spreads fastest through unpatched or unmonitored machines.</li></ul>
+</div>
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:#4fb3a9"></span>
+    <div class="section-title" style="margin:0;">DDoS</div>
+  </div>
+  <div class="playbook-stats">2 incidents &middot; £975.0m</div>
+  <ul class="playbook-list"><li>Put a CDN or DDoS-scrubbing service in front of anything public-facing.</li><li>Pre-negotiate an escalation path with your ISP/hosting provider before an attack, not during one.</li></ul>
+</div>
+<div class="card playbook-card">
+  <div class="playbook-head">
+    <span class="legend-dot" style="background:#8a8f98"></span>
+    <div class="section-title" style="margin:0;">Other</div>
+  </div>
+  <div class="playbook-stats">13 incidents &middot; £603.1m</div>
+  <ul class="playbook-list"><li>Insider and physical-access risk needs its own controls, separate from external-attacker defenses — several incidents in this bucket were contractor- or insider-driven.</li><li>Track third-party infrastructure dependencies (cloud providers, SaaS vendors) in your own risk register, since their outages become yours.</li></ul>
+</div></div>
+
+    <div class="card" style="margin-top: 14px;">
+      <div class="section-title">Nation-state vs. criminal posture</div>
+      <div class="compare-row">
+        <div>
+          <div class="compare-group-title">Nation-state attributed</div>
+          <ul class="playbook-list"><li>Focus on long-dwell-time detection, not just perimeter defense — nation-state actors more often prioritize persistent access over immediate disruption.</li><li>Critical infrastructure and government-adjacent sectors should assume they are targeted, not just at risk.</li><li>Threat intel sharing (NCSC, sector ISACs) matters more here, since attribution and tactics shift per state actor.</li></ul>
+        </div>
+        <div>
+          <div class="compare-group-title">Criminal / unattributed</div>
+          <ul class="playbook-list"><li>This bucket is majority financially motivated — ransomware readiness and backup discipline covers most of this exposure.</li><li>&quot;Unattributed&quot; doesn&#x27;t mean unsophisticated — several of the costliest incidents here (M&amp;S, MGM, Caesars) were criminal, not nation-state.</li><li>Cyber insurance and an incident-response retainer are worth evaluating given this bucket&#x27;s higher average disclosed cost.</li></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi-foot" style="margin-top:14px;">
+      These are general best-practice recommendations grounded in patterns across the 83 tracked incidents &mdash; not a live assessment of any specific organization's systems.
     </div>
   </section>
 
